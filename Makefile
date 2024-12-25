@@ -123,7 +123,7 @@ PONGO_C                     := $(wildcard $(SRC)/*/*.S) $(wildcard $(SRC)/*/*/*.
 PONGO_H                     := $(wildcard $(SRC)/*/*.h) $(wildcard $(SRC)/*/*/*.h) $(wildcard $(SRC)/*/*/*/*.h)
 
 KPF_H                       := $(wildcard $(RA1N)/*.h)
-KPF_C                       := $(wildcard $(RA1N)/*.c) $(wildcard $(RA1N)/*.S)
+KPF_C                       := $(filter-out $(RA1N)/main.c, $(wildcard $(RA1N)/*.c)) $(wildcard $(RA1N)/*.S)
 
 
 .PHONY: all always clean distclean

@@ -74,6 +74,6 @@ void panic(const char* str, ...) {
         }
    }
 
-    sleep(5);
+    while(1) sleep(5);
     wdt_reset();
 }

@@ -256,7 +256,7 @@ __attribute__((noinline)) void pongo_entry_cached()
         case BOOT_FLAG_HARD: // 1
         case BOOT_FLAG_DEFAULT: // 0
             // Boot XNU
-            xnu_loadrd();
+            // xnu_loadrd();
             if (sep_boot_hook)
                 sep_boot_hook();
             boot_msg = "Booting";

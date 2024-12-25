@@ -91,6 +91,8 @@ static bool kpf_developer_mode_callback(struct xnu_pf_patch *patch, uint32_t *op
     disable_developer_mode[0] = 0x14000000 | ((enable_developer_mode - disable_developer_mode) & 0x03ffffff); // uint32 takes care of >> 2
 
     puts("KPF: Found developer mode");
+    printf("enable_developer_mode=%p\n", enable_developer_mode);
+    printf("disable_developer_mode=%p\n", disable_developer_mode);
     return true;
 }
 

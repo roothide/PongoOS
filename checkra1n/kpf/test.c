@@ -254,7 +254,7 @@ static int kpf_compare_patches(const void *a, const void *b)
 
 kpf_component_t* const kpf_components[] = {
     // &kpf_bindfs,
-    // &kpf_developer_mode,
+    &kpf_developer_mode,
     // &kpf_dyld,
     // &kpf_launch_constraints,
     &kpf_mach_port,

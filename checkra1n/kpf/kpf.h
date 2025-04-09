@@ -130,10 +130,14 @@ extern kpf_component_t kpf_spawn_validate_persona;
 extern kpf_component_t kpf_trustcache;
 extern kpf_component_t kpf_vfs;
 extern kpf_component_t kpf_vm_prot;
+extern kpf_component_t kpf_applekeystore;
+
+uint64_t ksymbol(const char* name);
 
 /********** ********** ********** ********** ********** Exports ********** ********** ********** ********** **********/
 
 void kpf_overlay_cmd(const char *cmd, char *args);
+void kpf_trustcache_cmd(const char *cmd, char *args);
 
 uint64_t kpf_vfs__vfs_context_current(void);
 uint64_t kpf_vfs__vnode_lookup(void);

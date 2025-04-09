@@ -32,6 +32,23 @@
 #include <stdint.h>
 #include <stdio.h>
 
+
+enum{
+    TRUSTCACHE_PATCH_TYPE_OLD = 1,
+    TRUSTCACHE_PATCH_TYPE_NEW = 2,
+    TRUSTCACHE_PATCH_TYPE_MAX = 3
+};
+
+static bool did_run = false;
+static bool do_patch_shellcode = false;
+static void *trustcache_buf = NULL;
+static uint32_t trustcache_size = 0;
+static uint32_t *trustcache_patchpoint = NULL;
+static uint32_t trustcache_patch_type = 0;
+// Imports from shellcode.S
+extern uint32_t trustcache_hook[], trustcache_hook_addr[], trustcache_hook_size[], trustcache_hook_type[];
+extern uint32_t trustcache_hook_backup[], trustcache_hook_ptr[], trustcache_hook_end[];
+
 static bool found_trustcache = false;
 
 static bool kpf_trustcache_old_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
@@ -52,6 +69,8 @@ static bool kpf_trustcache_old_callback(struct xnu_pf_patch *patch, uint32_t *op
         panic_at(bl, "kpf_trustcache: Missing bl");
     }
 
+    printf("kpf_trustcache_old: find bl at %p\n", bl);
+
     // Follow the call
     uint32_t *lookup_in_static_trust_cache = follow_call(bl);
     // Skip any redirects
@@ -59,9 +78,17 @@ static bool kpf_trustcache_old_callback(struct xnu_pf_patch *patch, uint32_t *op
     {
         lookup_in_static_trust_cache = follow_call(lookup_in_static_trust_cache);
     }
+
+    printf("kpf_trustcache_old: find lookup_in_static_trust_cache at %p\n", lookup_in_static_trust_cache);
+
     // We legit, trust me bro.
-    lookup_in_static_trust_cache[0] = 0xd2802020; // movz x0, 0x101
-    lookup_in_static_trust_cache[1] = RET;
+    if (!do_patch_shellcode){
+        lookup_in_static_trust_cache[0] = 0xd2802020; // movz x0, 0x101
+        lookup_in_static_trust_cache[1] = RET;
+    }else{
+        trustcache_patchpoint = lookup_in_static_trust_cache;
+        trustcache_patch_type = TRUSTCACHE_PATCH_TYPE_OLD;
+    }
 
     puts("KPF: Found trustcache");
     return true;
@@ -83,11 +110,19 @@ static bool kpf_trustcache_new_callback(struct xnu_pf_patch *patch, uint32_t *op
         panic_at(opcode_stream, "kpf_trustcache: Failed to find start of function");
     }
 
-    // Just replace the entire func, no prisoners today.
-    start[0] = 0xd2800020; // mov x0, 1
-    start[1] = 0xb4000042; // cbz x2, .+0x8
-    start[2] = 0xf9000040; // str x0, [x2]
-    start[3] = RET;        // ret
+    printf("kpf_trustcache_new: find func start at %p\n", start);
+
+    if (!do_patch_shellcode)
+    {
+        // Just replace the entire func, no prisoners today.
+        start[0] = 0xd2800020; // mov x0, 1
+        start[1] = 0xb4000042; // cbz x2, .+0x8
+        start[2] = 0xf9000040; // str x0, [x2]
+        start[3] = RET;        // ret
+    } else{
+        trustcache_patchpoint = start;
+        trustcache_patch_type = TRUSTCACHE_PATCH_TYPE_NEW;
+    }
 
     puts("KPF: Found trustcache");
     return true;
@@ -170,8 +205,135 @@ static void kpf_trustcache_finish(struct mach_header_64 *hdr)
     }
 }
 
+typedef uint8_t trust_cache_hash0[20];
+typedef unsigned char uuid_t[16];
+struct trust_cache0 {
+    uint32_t version;
+    uuid_t uuid;
+    uint32_t num_entries;
+    trust_cache_hash0 hashes[];
+} __attribute__((__packed__));
+
+static void kpf_trustcache_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, palerain_option_t palera1n_flags)
+{
+    did_run = true;
+}
+
+void kpf_trustcache_cmd(const char *cmd, char *args)
+{
+    if(did_run)
+    {
+        puts("KPF ran already, trustcache cannot be set anymore.");
+        return;
+    }
+    if(!loader_xfer_recv_count)
+    {
+        puts("Please upload an trustcache before issuing this command.");
+        return;
+    }
+    if(trustcache_buf)
+    {
+        free(trustcache_buf);
+    }
+    trustcache_buf = malloc(loader_xfer_recv_count);
+    if(!trustcache_buf)
+    {
+        panic("Failed to allocate heap for trustcache");
+    }
+    trustcache_size = loader_xfer_recv_count;
+    memcpy(trustcache_buf, loader_xfer_recv_data, trustcache_size);
+    loader_xfer_recv_count = 0;
+
+    if (trustcache_size > 0){
+        do_patch_shellcode = true;
+        struct trust_cache0* tc = (struct trust_cache0*)trustcache_buf;
+        if (tc->version != 0){
+            panic("Only support trustcache version 0");
+        }
+        printf("Loads trustcache contains %d entries\n", tc->num_entries);
+    }
+}
+
+static uint32_t kpf_trustcache_size(void)
+{
+    if (!do_patch_shellcode)
+    {
+        return 0;
+    }
+    return trustcache_hook_end - trustcache_hook;
+}
+
+static uint32_t kpf_trustcache_emit(uint32_t *shellcode_area)
+{
+    if (!do_patch_shellcode)
+    {
+        return 0;
+    }
+
+    if (trustcache_patch_type >= TRUSTCACHE_PATCH_TYPE_MAX || trustcache_patch_type <= 0){
+        panic("kpf_trustcache: Invalid trustcache patch type");
+    }
+
+    memcpy(shellcode_area, trustcache_hook, (uintptr_t)trustcache_hook_end - (uintptr_t)trustcache_hook);
+
+    void *ov_static_buf = alloc_static(trustcache_size);
+    memcpy(ov_static_buf, trustcache_buf, trustcache_size);
+
+    uint64_t trustcache_addr = xnu_ptr_to_va(ov_static_buf);
+    uint64_t shellcode_addr  = xnu_ptr_to_va(shellcode_area);
+    uint64_t patchpoint_addr = xnu_ptr_to_va(trustcache_patchpoint);
+    uint64_t* shellcode_ptrs = (uint64_t*)(shellcode_area + (trustcache_hook_ptr - trustcache_hook));
+
+    size_t addr_idx = trustcache_hook_addr - trustcache_hook;
+    size_t size_idx = trustcache_hook_size - trustcache_hook;
+    size_t type_idx = trustcache_hook_type - trustcache_hook;
+    size_t backup_idx = trustcache_hook_backup - trustcache_hook;
+
+    shellcode_area[addr_idx + 0] |= ((trustcache_addr >> 48) & 0xffff) << 5;
+    shellcode_area[addr_idx + 1] |= ((trustcache_addr >> 32) & 0xffff) << 5;
+    shellcode_area[addr_idx + 2] |= ((trustcache_addr >> 16) & 0xffff) << 5;
+    shellcode_area[addr_idx + 3] |= ((trustcache_addr >>  0) & 0xffff) << 5;
+    shellcode_area[size_idx + 0] |= ((trustcache_size >> 16) & 0xffff) << 5;
+    shellcode_area[size_idx + 1] |= ((trustcache_size >>  0) & 0xffff) << 5;
+    shellcode_area[type_idx + 0] |= ((trustcache_patch_type >> 0) & 0xffff) << 5;
+
+    shellcode_ptrs[0] = ksymbol("_proc_selfname");
+    shellcode_area[backup_idx] = *trustcache_patchpoint;
+
+    if((shellcode_area[backup_idx] & 0x9F000000) == 0x90000000) //adrp
+    {
+        int64_t pageoff = adrp_off(shellcode_area[backup_idx]);
+        uint64_t targetpage = ((uint64_t)trustcache_patchpoint & (~0xfffULL)) + pageoff;
+        int64_t newpageoff = targetpage - ((uint64_t)&shellcode_area[backup_idx] & (~0xfffULL));
+
+        uint32_t immlo = (newpageoff>>12) & 0x3;
+        uint32_t immhi = ((newpageoff>>12) >> 2) & 0x7FFFF;
+        
+        shellcode_area[backup_idx] &= ~((0x3 << 29) | (0x7FFFF << 5));
+        shellcode_area[backup_idx] |= (immlo << 29) | (immhi << 5);
+    }
+
+    backup_idx++;
+
+    int64_t patch_off = shellcode_addr - patchpoint_addr;
+    if(patch_off > 0x7fffffcLL || patch_off < -0x8000000LL)
+    {
+        panic("trustcache_patch_new jump too far: 0x%" PRIx64 "", patch_off);
+    }
+    *trustcache_patchpoint = 0x14000000 | ((patch_off >> 2) & 0x03ffffff);
+
+    int64_t orig_off = ((uint64_t)trustcache_patchpoint + 4) - (uint64_t)&shellcode_area[backup_idx];
+    shellcode_area[backup_idx] = 0x14000000 | ((orig_off >> 2) & 0x03ffffff);
+
+    return trustcache_hook_end - trustcache_hook;
+}
+
+
 kpf_component_t kpf_trustcache =
 {
+    .init = kpf_trustcache_init,
+    .shc_size = kpf_trustcache_size,
+    .shc_emit = kpf_trustcache_emit,
     .finish = kpf_trustcache_finish,
     .patches =
     {

@@ -334,6 +334,7 @@ struct mach_header_64* xnu_pf_get_first_kext(struct mach_header_64* kheader) {
     free(kmod_start_range);
     return (struct mach_header_64*)xnu_va_to_ptr(kextb);
 }
+/*
 struct mach_header_64* xnu_pf_get_kext_header(struct mach_header_64* kheader, const char* kext_bundle_id) {
     xnu_pf_range_t* kmod_info_range = xnu_pf_section(kheader, "__PRELINK_INFO", "__kmod_info");
     if (!kmod_info_range) {
@@ -408,6 +409,119 @@ struct mach_header_64* xnu_pf_get_kext_header(struct mach_header_64* kheader, co
     free(kmod_start_range);
     return NULL;
 }
+*/
+
+#define KMOD_MAX_NAME    64
+
+typedef struct kmod_info {
+	struct kmod_info  * next;
+	int32_t             info_version;       // version of this structure
+	uint32_t            id;
+	char                name[KMOD_MAX_NAME];
+	char                version[KMOD_MAX_NAME];
+	int32_t             reference_count;    // # linkage refs to this
+	void*               reference_list;     // who this refs (links on)
+	vm_address_t        address;            // starting address
+	vm_size_t           size;               // total size
+	vm_size_t           hdr_size;           // unwired hdr size
+	void*               start;
+	void*               stop;
+} __attribute__((__packed__)) kmod_info_t;
+
+#define KEXTLOG(fmt, ...) do{ if(!kext_bundle_id) {printf(fmt, ##__VA_ARGS__);} }while(0)
+struct mach_header_64* xnu_pf_get_kext_header(struct mach_header_64* kheader, const char* kext_bundle_id)
+{
+    xnu_pf_range_t* kmod_info_range = xnu_pf_section(kheader, "__PRELINK_INFO", "__kmod_info");
+    if (!kmod_info_range) {
+        char kname[256];
+        xnu_pf_range_t* kext_info_range = xnu_pf_section(kheader, "__PRELINK_INFO", "__info");
+        if (!kext_info_range) panic("unsupported xnu");
+
+        struct mach_header_64* result = NULL;
+
+        const char* prelinkinfo = strstr((const char*)kext_info_range->cacheable_base, "PrelinkInfoDictionary");
+        const char* start = strstr(prelinkinfo, "<array>") + 7;
+        const char* end = (const char*)kext_info_range->cacheable_base + kext_info_range->size;
+        while (start < end) {
+            const char* addr = memmem(start, end - start, "_PrelinkExecutableLoadAddr", strlen("_PrelinkExecutableLoadAddr"));
+            if(!addr) break;
+
+            start = addr + strlen("_PrelinkExecutableLoadAddr");
+
+            const char* avalue = strstr(addr, "<integer");
+            if (!avalue) {
+                KEXTLOG("no valid loadaddr!\n");
+                continue;
+            }
+            avalue = strstr(avalue, ">");
+            if (!avalue) {
+                KEXTLOG("'>' mismatched!\n");
+                continue;
+            }
+            avalue++;
+            uint64_t kexthdr = xnu_slide_value(kheader) + strtoull(avalue, 0, 0);
+            struct mach_header_64* kextptr = xnu_va_to_ptr(kexthdr);
+            KEXTLOG("header1: %llx\n", kexthdr);
+            if(kextptr->magic != MH_MAGIC_64) {
+                KEXTLOG("not a valid macho!\n");
+                continue;
+            }
+            xnu_pf_range_t* kext_data_range = xnu_pf_section(kextptr, "__DATA", "__data");
+            if (!kext_data_range) {
+                KEXTLOG("kext_data_range is NULL\n");
+                continue;
+            }
+
+            kmod_info_t* kmod_info = (kmod_info_t*)kext_data_range->cacheable_base;
+            free(kext_data_range);
+            kext_data_range = NULL;
+
+            uint64_t kmodloadaddr = kext_rebase_va(kmod_info->address);
+
+            if(kext_bundle_id && strcmp(kext_bundle_id, kmod_info->name) == 0) {
+                if(kexthdr != kmodloadaddr) {
+                    panic("kext loadaddr mismatch!\n");
+                }
+                result = kextptr;
+                break;
+            }
+
+            KEXTLOG("kext_name1: %s addr=%p->%p size=%lx\n", kmod_info->name, kmod_info->address, kmodloadaddr, kmod_info->size);
+            if(kexthdr != kmodloadaddr) {
+                KEXTLOG("kext loadaddr mismatch!\n");
+                continue;
+            }
+        }
+
+        free(kext_info_range);
+        return result;
+    }
+
+    xnu_pf_range_t* kmod_start_range = xnu_pf_section(kheader, "__PRELINK_INFO", "__kmod_start");
+    if (!kmod_start_range) {
+        free(kmod_info_range);
+        return NULL;
+    }
+
+    uint64_t* info = (uint64_t*)(kmod_info_range->cacheable_base);
+    uint64_t* start = (uint64_t*)(kmod_start_range->cacheable_base);
+    uint32_t count = kmod_info_range->size / 8;
+    for (uint32_t i=0; i<count; i++) {
+        const char* kext_name = (const char*)xnu_va_to_ptr(xnu_slide_value(kheader) + (0xffff000000000000 | info[i])) + 0x10;
+        uint64_t kext_addr = xnu_slide_value(kheader) + (0xffff000000000000 | start[i]);
+        KEXTLOG("kext_name2: %s, addr=%p, %p\n", kext_name, kext_addr, start[i]);
+        if (kext_bundle_id && strcmp(kext_name, kext_bundle_id) == 0) {
+            free(kmod_info_range);
+            free(kmod_start_range);
+            return (struct mach_header_64*) xnu_va_to_ptr(kext_addr);
+        }
+    }
+
+    free(kmod_info_range);
+    free(kmod_start_range);
+    return NULL;
+}
+
 void xnu_pf_apply_each_kext(struct mach_header_64* kheader, xnu_pf_patchset_t* patchset)
 {
     xnu_pf_range_t* kmod_start_range = xnu_pf_section(kheader, "__PRELINK_INFO", "__kmod_start");

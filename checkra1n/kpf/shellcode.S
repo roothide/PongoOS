@@ -609,4 +609,453 @@ L_fsctl_shc_mnt:
     .asciz "/fs/orig"
 .align 2
 _fsctl_shc_end:
-#endif
+
+
+
+.align 2
+.globl _shellcode_start
+.globl _shellcode_end
+
+_shellcode_start:
+
+.align 2
+.globl _trustcache_hook
+.globl _trustcache_hook_ptr
+.globl _trustcache_hook_addr
+.globl _trustcache_hook_size
+.globl _trustcache_hook_type
+.globl _trustcache_hook_backup
+.globl _trustcache_hook_end
+
+_trustcache_hook:
+    b trustcache_hook$start
+
+trustcache_hook$start:
+    sub sp, sp, #0xa0
+    stp x26, x25, [sp, #0x50]
+    stp x24, x23, [sp, #0x60]
+    stp x22, x21, [sp, #0x70]
+    stp x20, x19, [sp, #0x80]
+    stp x29, x30, [sp, #0x90]
+    add x29, sp, #0x90
+
+    mov x19, x0
+    mov x20, x1
+    mov x21, x2
+
+_trustcache_hook_addr:
+    movz x0, 0x0000, lsl 48
+    movk x0, 0x0000, lsl 32
+    movk x0, 0x0000, lsl 16
+    movk x0, 0x0000
+    mov x22, x0
+
+_trustcache_hook_size:
+    movz w1, 0x0000, lsl 16
+    movk w1, 0x0000
+    mov w23, w1
+
+_trustcache_hook_type:
+    movz w2, 0x0000
+    mov w24, w2
+
+trustcache_hook$proc_check:
+    mov  x0, sp
+    mov  w1, #0x40
+    ldr  x8, trustcache_hook$proc_selfname
+    blr  x8
+
+    //check "launchd\0"
+    ldr  x8, [sp]
+    movz x9, 0x0064, lsl 48
+    movk x9, 0x6863, lsl 32
+    movk x9, 0x6E75, lsl 16
+    movk x9, 0x616C
+    cmp  x8, x9
+    b.eq trustcache_hook$hijack //launchd fastPath
+
+    //check "xpcproxy\0"
+    ldr  x8, [sp]
+    movz x9, 0x7978, lsl 48
+    movk x9, 0x6F72, lsl 32
+    movk x9, 0x7063, lsl 16
+    movk x9, 0x7078
+    cmp  x8, x9
+    ldrb w8, [sp, #0x8]
+    ccmp w8, #0x0, #0x0, eq
+    b.eq trustcache_hook$orig //xpcproxy fastPath
+
+    //check "Dopamine\0"
+    ldr  x8, [sp]
+    movz x9, 0x656E, lsl 48
+    movk x9, 0x696D, lsl 32
+    movk x9, 0x6170, lsl 16
+    movk x9, 0x6F44
+    cmp  x8, x9
+    ldrb w8, [sp, #0x8]
+    ccmp w8, #0x0, #0x0, eq
+    b.eq trustcache_hook$allow
+
+    //check "TrollStore\0"
+    ldr  x8, [sp]
+    movz x9, 0x6F74, lsl 48
+    movk x9, 0x536C, lsl 32
+    movk x9, 0x6C6F, lsl 16
+    movk x9, 0x7254
+    cmp  x8, x9
+    ldrh w8, [sp, #0x8]
+    mov  w9, #0x6572
+    ccmp w8, w9, #0x0, eq
+    ldrb w8, [sp, #0xA]
+    ccmp w8, #0x0, #0x0, eq
+    b.eq trustcache_hook$allow
+
+    //check "trollstorehelper\0"
+    ldr  x8, [sp]
+    movz x9, 0x6F74, lsl 48
+    movk x9, 0x736C, lsl 32
+    movk x9, 0x6C6F, lsl 16
+    movk x9, 0x7274
+    cmp  x8, x9
+    ldr  x8, [sp, #0x8]
+    movz x9, 0x7265, lsl 48
+    movk x9, 0x706C, lsl 32
+    movk x9, 0x6568, lsl 16
+    movk x9, 0x6572
+    ccmp x8, x9, #0x0, eq
+    ldrb w8, [sp, #0x10]
+    ccmp w8, #0x0, #0x0, eq
+    b.eq trustcache_hook$allow
+
+    //check "FilzaTS\0"
+    ldr  x8, [sp]
+    movz x9, 0x0053, lsl 48
+    movk x9, 0x5461, lsl 32
+    movk x9, 0x7A6C, lsl 16
+    movk x9, 0x6946
+    cmp  x8, x9
+    b.eq trustcache_hook$allow
+
+    //prevent other processes from detecting our tc
+    b trustcache_hook$orig
+
+trustcache_hook$hijack:
+    cmp w24, #0x2
+    b.eq b_new
+    cmp w24, #0x1
+    b.eq b_old
+    brk #1
+b_old:
+    b trustcache_hook$hijack_old
+b_new:
+    b trustcache_hook$hijack_new
+
+trustcache_hook$orig:
+    cmp w24, #0x2
+    b.eq trustcache_hook$orig_new
+    cmp w24, #0x1
+    b.eq trustcache_hook$orig_old
+    brk #1
+
+trustcache_hook$allow:
+    cmp w24, #0x2
+    b.eq trustcache_hook$allow_new
+    cmp w24, #0x1
+    b.eq trustcache_hook$allow_old
+    brk #1
+
+trustcache_hook$hijack_old:
+    mov x1, x19
+
+    mov x9, x22
+    ldr w8, [x9, #0x14]
+    cbz w8, trustcache_hook$orig_old
+
+    add x10, x9, #0x18
+
+    ldr x3, [x1]
+    ldr x4, [x1, #8]
+    ldr w5, [x1, #0x10]
+    b cdhash_equals_old
+
+    loop_body_old:
+        add             x10, x10, #0x14
+        subs            x8, x8, #1
+        b.eq            trustcache_hook$orig_old
+
+    cdhash_equals_old:
+        ldr x0, [x10]
+        cmp x0, x3
+        b.ne loop_body_old
+        ldr x0, [x10,#8]
+        cmp x0, x4
+        b.ne loop_body_old
+        ldr w0, [x10, #0x10]
+        cmp w0, w5
+        b.ne loop_body_old
+
+    loop_out_old:
+        b trustcache_hook$allow_old
+
+trustcache_hook$hijack_new:
+    mov x0, x19
+    mov x1, x20
+    mov x2, x21
+    mov x9, x22
+
+    ldr w8, [x9, #0x14]
+    cbz w8, trustcache_hook$orig_new
+    add x10, x9, #0x18
+    ldr x3, [x1]
+    ldr x4, [x1, #8]
+    ldr w5, [x1, #0x10]
+    b cdhash_equals
+
+    loop_body:
+        add             x10, x10, #0x14
+        subs            x8, x8, #1
+        b.eq            trustcache_hook$orig_new
+
+    cdhash_equals:
+        ldr x0, [x10]
+        cmp x0, x3
+        b.ne loop_body
+        ldr x0, [x10,#8]
+        cmp x0, x4
+        b.ne loop_body
+        ldr w0, [x10, #0x10]
+        cmp w0, w5
+        b.ne loop_body
+
+    loop_out:
+        b trustcache_hook$allow_new
+
+trustcache_hook$orig_old:
+    mov x0, x19
+    bl _trustcache_hook_backup
+    b trustcache_hook$ret
+
+trustcache_hook$orig_new:
+    mov x0, x19
+    mov x1, x20
+    mov x2, x21
+    bl _trustcache_hook_backup
+    b trustcache_hook$ret
+
+_trustcache_hook_backup:
+    nop
+    nop
+    nop
+    nop
+    nop
+    // b patchpoint+4
+
+trustcache_hook$allow_old:
+    movz x0, 0x101
+    b trustcache_hook$ret
+
+trustcache_hook$allow_new:
+    mov x0, x19
+    mov x1, x20
+    mov x2, x21
+    mov x0, 1
+    cbz x2, .+0x8
+    str x0, [x2]
+    b trustcache_hook$ret
+
+trustcache_hook$ret:
+    ldp x29, x30, [sp, #0x90]
+    ldp x20, x19, [sp, #0x80]
+    ldp x22, x21, [sp, #0x70]
+    ldp x24, x23, [sp, #0x60]
+    ldp x26, x25, [sp, #0x50]
+    add sp, sp, #0xa0
+    ret
+
+.align 3
+_trustcache_hook_ptr:
+trustcache_hook$proc_selfname:
+.quad 0x1122334455667788
+
+.align 2
+_trustcache_hook_end:
+
+
+.align 2
+.globl _applekeystore_hook
+.globl _applekeystore_hook_ptr
+.globl _applekeystore_hook_end
+
+_applekeystore_hook:
+    b applekeystore_hook$aks_externalMethod
+
+.align 3
+applekeystore_hook$aks_lockstate_der:
+.byte 0x0c, 0x03, 0x73, 0x6c, 0x73, 0x02, 0x01, 0x03
+applekeystore_hook$aks_lockstate_der_end:
+
+.equ applekeystore_hook$aks_lockstate_value_offset, 7
+.equ applekeystore_hook$aks_lockstate_der_length, applekeystore_hook$aks_lockstate_der_end - applekeystore_hook$aks_lockstate_der
+
+.align 2
+applekeystore_hook$aks_externalMethod:
+    sub sp, sp, #0xa0
+    stp x26, x25, [sp, #0x50]
+    stp x24, x23, [sp, #0x60]
+    stp x22, x21, [sp, #0x70]
+    stp x20, x19, [sp, #0x80]
+    stp x29, x30, [sp, #0x90]
+    add x29, sp, #0x90
+
+    mov x19, x0
+    mov x20, x1
+    mov x21, x2
+
+    ldr  x8, applekeystore_hook$orig_aks_externalMethod
+    blr  x8
+    mov x22, x0
+    cbnz x22, applekeystore_hook$aks_externalMethod$ret
+/*
+    ldr  x8, applekeystore_hook$proc_selfpid
+    blr  x8
+    cbz w0, applekeystore_hook$aks_externalMethod$ret
+    cmp w0, 1
+    b.eq applekeystore_hook$aks_externalMethod$ret
+*/
+    ldr  x8, applekeystore_hook$current_proc
+    blr  x8
+    cbz x0, applekeystore_hook$aks_externalMethod$ret
+    mov x23, x0
+/*
+    mov x0, x23
+    ldr  x8, applekeystore_hook$csproc_get_blob
+    blr  x8
+    cbz x0, applekeystore_hook$aks_externalMethod$ret
+*/
+    mov x0, x23
+    ldr  x8, applekeystore_hook$csproc_get_platform_binary
+    blr  x8
+    cbnz w0, applekeystore_hook$aks_externalMethod$ret
+
+    cmp w20, 17
+    b.eq applekeystore_hook$fakestate
+    cmp w20, 35
+    b.eq applekeystore_hook$fakestate
+    b applekeystore_hook$aks_externalMethod$ret
+
+applekeystore_hook$fakestate:
+    ldr x0, [x21, #0x58] //structureOutput
+    cbz x0, applekeystore_hook$aks_externalMethod$ret
+    ldr w1, [x21, #0x60] //structureOutputSize
+    cbz w1, applekeystore_hook$aks_externalMethod$ret
+    adr x2, applekeystore_hook$aks_lockstate_der
+    mov w3, applekeystore_hook$aks_lockstate_der_length
+    bl memmem
+    cbz x0, applekeystore_hook$aks_externalMethod$ret
+    mov w1, 0
+    strb w1, [x0, applekeystore_hook$aks_lockstate_value_offset]
+
+applekeystore_hook$aks_externalMethod$ret:
+
+    mov x0, x22
+
+    ldp x29, x30, [sp, #0x90]
+    ldp x20, x19, [sp, #0x80]
+    ldp x22, x21, [sp, #0x70]
+    ldp x24, x23, [sp, #0x60]
+    ldp x26, x25, [sp, #0x50]
+    add sp, sp, #0xa0
+    ret
+    
+_applekeystore_hook_ptr:
+applekeystore_hook$orig_aks_externalMethod:
+.quad 0x4141414141414141
+applekeystore_hook$current_proc:
+.quad 0x4242424242424242
+applekeystore_hook$csproc_get_blob:
+.quad 0x4242424242424242
+applekeystore_hook$csproc_get_platform_binary:
+.quad 0x4242424242424242
+applekeystore_hook$proc_selfpid:
+.quad 0x4242424242424242
+
+.align 2
+memmem:
+        sub     sp, sp, #64
+        str     x0, [sp, 24]
+        str     x1, [sp, 16]
+        str     x2, [sp, 8]
+        str     x3, [sp]
+        ldr     x0, [sp]
+        cmp     x0, 0
+        bne     .L2
+        ldr     x0, [sp, 24]
+        b       .L3
+.L2:
+        ldr     x1, [sp, 16]
+        ldr     x0, [sp]
+        cmp     x1, x0
+        bcs     .L4
+        mov     x0, 0
+        b       .L3
+.L4:
+        ldr     x0, [sp, 24]
+        str     x0, [sp, 40]
+        ldr     x0, [sp, 8]
+        str     x0, [sp, 32]
+        str     xzr, [sp, 56]
+        b       .L5
+.L10:
+        str     xzr, [sp, 48]
+        b       .L6
+.L8:
+        ldr     x0, [sp, 48]
+        add     x0, x0, 1
+        str     x0, [sp, 48]
+.L6:
+        ldr     x1, [sp, 48]
+        ldr     x0, [sp]
+        cmp     x1, x0
+        bcs     .L7
+        ldr     x1, [sp, 56]
+        ldr     x0, [sp, 48]
+        add     x0, x1, x0
+        ldr     x1, [sp, 40]
+        add     x0, x1, x0
+        ldrb    w1, [x0]
+        ldr     x2, [sp, 32]
+        ldr     x0, [sp, 48]
+        add     x0, x2, x0
+        ldrb    w0, [x0]
+        cmp     w1, w0
+        beq     .L8
+.L7:
+        ldr     x1, [sp, 48]
+        ldr     x0, [sp]
+        cmp     x1, x0
+        bne     .L9
+        ldr     x1, [sp, 40]
+        ldr     x0, [sp, 56]
+        add     x0, x1, x0
+        b       .L3
+.L9:
+        ldr     x0, [sp, 56]
+        add     x0, x0, 1
+        str     x0, [sp, 56]
+.L5:
+        ldr     x1, [sp, 16]
+        ldr     x0, [sp]
+        sub     x0, x1, x0
+        ldr     x1, [sp, 56]
+        cmp     x1, x0
+        bls     .L10
+        mov     x0, 0
+.L3:
+        add     sp, sp, 64
+        ret
+
+.align 2
+_applekeystore_hook_end:
+
+.align 2
+_shellcode_end:

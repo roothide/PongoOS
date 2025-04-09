@@ -299,7 +299,7 @@ kpf_component_t* const kpf_components[] = {
     // &kpf_bindfs,
     &kpf_developer_mode,
     // &kpf_dyld,
-    // &kpf_launch_constraints,
+    &kpf_launch_constraints,
     &kpf_mach_port,
     &kpf_nvram,
     // &kpf_proc_selfname,

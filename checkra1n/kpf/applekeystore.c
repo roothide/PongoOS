@@ -10,7 +10,6 @@
 extern uint32_t applekeystore_hook[], applekeystore_hook_ptr[], applekeystore_hook_end[];
 
 static bool need_applekeystore_patch = false;
-static bool found_applekeystore_patch = false;
 
 static uint64_t* externalMethod_vtable_ptr = NULL;
 
@@ -25,10 +24,6 @@ static void kpf_applekeystore_finish(struct mach_header_64 *hdr, palerain_option
 {
     if(!need_applekeystore_patch) return;
 
-    if(!found_applekeystore_patch)
-    {
-        panic("Missing patch: applekeystore");
-    }
 }
 
 static bool kpf_applekeystore_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
@@ -38,6 +33,11 @@ static bool kpf_applekeystore_callback(struct xnu_pf_patch *patch, uint32_t *opc
     if(strcmp(str, "%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s\n") != 0)
     {
         return false;
+    }
+
+    if(externalMethod_vtable_ptr)
+    {
+        panic("kpf_applekeystore: Found twice");
     }
 
     uint32_t *start = find_prev_insn(opcode_stream - 1, 1000, 0xd10003ff, 0xffc003ff); // sub sp, sp, ...
@@ -62,7 +62,6 @@ static bool kpf_applekeystore_callback(struct xnu_pf_patch *patch, uint32_t *opc
         {
             printf("Found externalMethod vtable ptr %p\n", ptr);
             externalMethod_vtable_ptr = ptr;
-            found_applekeystore_patch = true;
             break;
         }
     }
@@ -73,6 +72,7 @@ static bool kpf_applekeystore_callback(struct xnu_pf_patch *patch, uint32_t *opc
 
     free(aks_const);
 
+    printf("KPF: Found applekeystore\n");
     return true;
 }
 
@@ -85,12 +85,12 @@ static void kpf_applekeystore_patches(xnu_pf_patchset_t *aks_text_exec_patchset)
         0x90000000, // adrp x0, 0x...
         0x91000000, // add x0, x0, 0x...
     };
-    uint64_t masks4[] =
+    uint64_t masks[] =
     {
         0x9f00001f,
         0xffc003ff,
     };
-    xnu_pf_maskmatch(aks_text_exec_patchset, "applekeystore", matches, masks4, sizeof(matches)/sizeof(uint64_t), false, (void*)kpf_applekeystore_callback);
+    xnu_pf_maskmatch(aks_text_exec_patchset, "applekeystore", matches, masks, sizeof(matches)/sizeof(uint64_t), true, (void*)kpf_applekeystore_callback);
 }
 
 static uint32_t kpf_applekeystore_size(void)

@@ -236,7 +236,7 @@ static bool kpf_find_shellcode_area_callback(struct xnu_pf_patch *patch, uint32_
     // we only match what we want to, but this is literally just empty space.
     xnu_pf_disable_patch(patch);
     shellcode_area = opcode_stream;
-    printf("KPF: Found shellcode area %p\n", shellcode_area);
+    printf("KPF: Found shellcode area %p %p\n", shellcode_area, xnu_ptr_to_va(shellcode_area));
     return true;
 }
 

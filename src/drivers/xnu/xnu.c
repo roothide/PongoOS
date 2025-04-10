@@ -921,6 +921,7 @@ uint32_t* xnu_pf_maskmatch_emit(struct xnu_pf_maskmatch* patch, struct xnu_pf_pa
     }
 
     uint32_t jit_test[(4*2 + 4)];
+    patchset->p0 = 0; //Don't forget to initialize p0
     for (int i=0; i<cap; i++) {
         if (i == hi_entropy) {
             continue;

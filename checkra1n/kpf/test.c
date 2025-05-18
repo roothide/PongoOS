@@ -307,10 +307,11 @@ kpf_component_t* const kpf_components[] = {
     &kpf_spawn_validate_persona,
     // &kpf_overlay,
     // &kpf_ramdisk,
-    &kpf_trustcache,
+    // &kpf_trustcache,
     // &kpf_vfs,
     // &kpf_vm_prot,
     &kpf_applekeystore,
+    &kpf_shellcode_roothide,
 };
 
 static void kpf_cmd(const char *cmd, char *args)
@@ -595,11 +596,14 @@ void test()
     printf("gBootArgs->virtBase: %p\n", gBootArgs->virtBase);
     printf("gBootArgs->memSize: %lx\n", gBootArgs->memSize);
     printf("gBootArgs->topOfKernelData: %p\n", gBootArgs->topOfKernelData);
+#ifndef KPF_TEST
     printf("gTopOfKernelData: %p\n", gTopOfKernelData);
+#endif
     
+#ifndef KPF_TEST
     dt_node_t *memory_map = dt_node(gDeviceTree, "/chosen/memory-map");
     dt_parse(memory_map, -1, NULL, NULL, NULL, &dt_list_memmap_cb, NULL);
-
+#endif
 }
 
 void module_entry(void)
@@ -643,6 +647,31 @@ void module_entry(void)
     command_register("overlay", "alias for loading a trustcache, reusing palera1n", kpf_trustcache_cmd);
     command_register("trustcache", "loads a trustcache", kpf_trustcache_cmd);
     command_register("test", "kpf test func", test);
+
+#if defined(DEV_BUILD) || defined(KPF_TEST)
+    test();
+#endif
+
+#ifdef DEV_BUILD
+#ifndef KPF_TEST
+    queue_rx_string("xargs serial=3\n");
+#endif
+    uint64_t kernel_printf = ksymbol("_printf");
+    if(kernel_printf) {
+        uint32_t* _printf_ptr = xnu_va_to_ptr(kernel_printf);
+        for(int i=0; i<100; i++) {
+            if(_printf_ptr[i] == 0x52800025) { //mov w5, 1
+                if((_printf_ptr[i+1]&0xFC000000) != 0x94000000) { //BL?
+                    continue;
+                }
+                printf("Found doprnt(is_log=TRUE) in printf\n");
+                _printf_ptr[i] = 0x52800005; //mov w5, 0
+                break;
+            }
+        }
+    }
+#endif
+
 }
 const char *module_name = "checkra1n-kpf2-12.0,16.4";
 

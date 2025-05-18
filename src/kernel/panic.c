@@ -74,6 +74,11 @@ void panic(const char* str, ...) {
         }
    }
 
-    sleep(10*60);
+#ifdef DEV_BUILD
+   sleep(60*60);
+#else
+   sleep(5*60);
+#endif
+
     wdt_reset();
 }

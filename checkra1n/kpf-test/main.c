@@ -141,9 +141,19 @@ void command_register(const char* name, const char* desc, void (*cb)(const char*
     // nop
 }
 
+#define KTOP_MEM_MAX_SIZE (1024*1024*100)
+static size_t KTOP_MEM_USED_SIZE = 0;
 void* alloc_static(uint32_t size)
 {
-    return malloc(size);
+    KTOP_MEM_USED_SIZE += size;
+    if(KTOP_MEM_USED_SIZE >= KTOP_MEM_MAX_SIZE)
+    {
+        fprintf(stderr, "alloc_static: out of memory\n");
+        exit(-1);
+    }
+    void* p = (void*)BootArgs.topOfKernelData;
+    BootArgs.topOfKernelData += size;
+    return p;
 }
 
 void invalidate_icache(void)
@@ -362,7 +372,7 @@ static void __attribute__((noreturn)) process_kernel(int fd)
         exit(-1);
     }
     size_t mlen = highest - lowest;
-    void *mem = mmap(NULL, mlen, use_mmap ? PROT_NONE : PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    void *mem = mmap(NULL, mlen+KTOP_MEM_MAX_SIZE, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     if(mem == MAP_FAILED)
     {
         fprintf(stderr, "mmap: %s\n", strerror(errno));
@@ -428,6 +438,89 @@ static void __attribute__((noreturn)) process_kernel(int fd)
 
     module_entry();
     preboot_hook();
+
+
+#ifdef __apple_build_version__
+
+extern void* xnu_header();
+extern uint64_t xnu_ptr_to_va(void* ptr);
+
+//fix file offset and size for segments
+struct mach_header_64* header = xnu_header();
+struct load_command* lc = (struct load_command*)((uint64_t)header + sizeof(*header));
+for (int i = 0; i < header->ncmds; i++) {        
+    switch(lc->cmd) {
+        case LC_SEGMENT_64: {
+            struct segment_command_64 * seg = (struct segment_command_64 *) lc;
+            printf("segment[%d]:%16s   file=0x%llX:0x%llX   vm=0x%llX:0x%llX\n", i, seg->segname, seg->fileoff, seg->filesize, seg->vmaddr, seg->vmsize);
+
+            int64_t vmoffset = (uint64_t)seg->vmaddr - xnu_ptr_to_va(header);
+            if(vmoffset>=0 && (vmoffset != seg->fileoff  ||  seg->filesize != seg->vmsize)) {
+                seg->fileoff = vmoffset;
+                seg->filesize = seg->vmsize;
+                printf("fixed segment! -> %p:%p\n", vmoffset, seg->vmsize);
+            }
+
+            struct section_64* sec = (struct section_64*)((uint64_t)seg+sizeof(*seg));
+            for(int j=0; j<seg->nsects; j++)
+            {
+                printf("*section[%d]:%16s/%16s   offset=0x%X   vm=0x%llX:0x%llX\n", j, sec[j].segname, sec[j].sectname, sec[j].offset, sec[j].addr, sec[j].size);
+
+                int64_t vmoffset = (uint64_t)sec[j].addr - xnu_ptr_to_va(header);
+                if(vmoffset>=0 && sec[j].offset && sec[j].size>0 && (vmoffset != sec[j].offset)) {
+                    sec[j].offset = vmoffset;
+                    printf("fixed section! ->%p\n", vmoffset);
+                }
+            }
+            break;
+        }
+    }
+    /////////
+    lc = (struct load_command *) ((char *)lc + lc->cmdsize);
+}
+
+size_t xnu_size = BootArgs.memSize - ((uint64_t)xnu_header() - (uint64_t)BootArgs.physBase);
+size_t dump_size =  xnu_size + KTOP_MEM_USED_SIZE;
+
+//add topOfKernelData segment
+// struct mach_header_64* header = xnu_header();
+void* cmds_end = (void*)((uint64_t)header + sizeof(*header) + header->sizeofcmds);
+struct segment_command_64 new_segment = {
+    .cmd = LC_SEGMENT_64,
+    .cmdsize=sizeof(struct segment_command_64),
+    .segname = {"TOPOFKERNELDATA"},
+    .vmaddr = xnu_ptr_to_va((uint64_t)mem + mlen),
+    .vmsize = KTOP_MEM_USED_SIZE,
+    .fileoff = xnu_size,
+    .filesize = KTOP_MEM_USED_SIZE,
+    .maxprot = VM_PROT_READ|VM_PROT_WRITE,
+    .initprot = VM_PROT_READ|VM_PROT_WRITE,
+    .nsects = 0,
+    .flags = 0
+};
+
+memcpy(cmds_end, &new_segment, sizeof(new_segment));
+header->sizeofcmds += sizeof(new_segment);
+header->ncmds += 1;
+
+//dump patched kernel
+char path[1024] = {0};
+if(fcntl(fd, F_GETPATH, path) == 0) {
+    strlcat(path, ".patched", sizeof(path));
+    printf("Dumping patched kernel to %s\n", path);
+    int fdout = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if(fdout > 0) {
+        write(fdout, (void*)xnu_header(), dump_size);
+        close(fdout);
+        printf("done.\n");
+    } else {
+        fprintf(stderr, "open(%s): %s\n", path, strerror(errno));
+    }
+} else {
+    fprintf(stderr, "fcntl: %s\n", strerror(errno));
+}
+#endif
+
 
     exit(0);
 }

@@ -30,16 +30,17 @@ ifeq ($(HOST_OS),Linux)
 endif
 endif
 
+KPF_CC_FLAGS += -DSHELLCODE_BIN_PATH='"$(ROOT)/build/shellcode"'
 
 .PHONY: all clean
 
 all: kpf-test.ios kpf-test.macos
 
-kpf-test.ios: Makefile $(KPF_C) $(KPF_H)
+kpf-test.ios: Makefile $(KPF_C) $(KPF_H) $(ROOT)/build/shellcode
 	$(IOS_CC) -o $@ $(KPF_C) $(KPF_CC_FLAGS)
 	$(SIGN) $@
 
-kpf-test.macos: Makefile $(KPF_C) $(KPF_H)
+kpf-test.macos: Makefile $(KPF_C) $(KPF_H) $(ROOT)/build/shellcode
 	$(MACOS_CC) -o $@ $(KPF_C) $(KPF_CC_FLAGS)
 
 clean:

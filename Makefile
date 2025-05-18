@@ -125,6 +125,7 @@ PONGO_H                     := $(wildcard $(SRC)/*/*.h) $(wildcard $(SRC)/*/*/*.
 KPF_H                       := $(wildcard $(RA1N)/*.h)
 KPF_C                       := $(filter-out $(RA1N)/main.c, $(wildcard $(RA1N)/*.c)) $(wildcard $(RA1N)/*.S)
 
+KPF_CC_FLAGS += -DSHELLCODE_BIN_PATH='"$(BUILD)/shellcode"'
 
 .PHONY: all always clean distclean
 
@@ -139,6 +140,20 @@ $(BUILD)/Pongo.bin: $(BUILD)/vmacho $(BUILD)/Pongo | $(BUILD)
 $(BUILD)/Pongo: Makefile $(PONGO_C) $(PONGO_H) $(LIB)/fixup/libc.a | $(BUILD)
 	$(EMBEDDED_CC) -o $@ $(PONGO_C) $(EMBEDDED_CC_FLAGS) $(PONGO_CC_FLAGS)
 
+SHELLCODE_CFLAGS = -Wl,-kext -Wall -Wstrict-prototypes -Werror=incompatible-function-pointer-types -ffreestanding -nostdlibinc -fno-blocks -Wno-strict-prototypes -nostdlib -Wl,-dead_strip -Wl,-Z
+ifdef DEV_BUILD
+    SHELLCODE_CFLAGS += -DDEV_BUILD
+endif
+$(BUILD)/shellcode: Makefile $(wildcard checkra1n/shellcode/*.c) $(LIB)/fixup/libc.a | $(BUILD)
+	$(EMBEDDED_CC) -o $@ $(wildcard checkra1n/shellcode/*.c) -Os $(SHELLCODE_CFLAGS) -I$(LIB)/include -fno-stack-protector -static -L$(LIB)/fixup -lc \
+        -Wl,-rename_section,__TEXT,__text,__SHELLCODE,__code \
+        -Wl,-rename_section,__TEXT,__cstring,__SHELLCODE,__data \
+        -Wl,-rename_section,__DATA,__data,__SHELLCODE,__data \
+        -Wl,-rename_section,__DATA,__const,__SHELLCODE,__data \
+        -Wl,-rename_section,__DATA,__common,__SHELLCODE,__data \
+        
+
+$(BUILD)/checkra1n-kpf-pongo: $(BUILD)/shellcode
 $(BUILD)/checkra1n-kpf-pongo: Makefile $(KPF_C) $(KPF_H) $(PONGO_H) $(LIB)/fixup/libc.a | $(BUILD)
 	$(EMBEDDED_CC) -o $@ $(KPF_C) $(EMBEDDED_CC_FLAGS) $(KPF_CC_FLAGS)
 

@@ -131,8 +131,10 @@ extern kpf_component_t kpf_trustcache;
 extern kpf_component_t kpf_vfs;
 extern kpf_component_t kpf_vm_prot;
 extern kpf_component_t kpf_applekeystore;
+extern kpf_component_t kpf_shellcode_roothide;
 
 uint64_t ksymbol(const char* name);
+uint64_t ksymbol_required(const char* name);
 
 /********** ********** ********** ********** ********** Exports ********** ********** ********** ********** **********/
 

@@ -442,45 +442,95 @@ static void __attribute__((noreturn)) process_kernel(int fd)
 
 #ifdef __apple_build_version__
 
+printf("dumping patched kernel ...\n");
+
 extern void* xnu_header();
+extern void* xnu_va_to_ptr(uint64_t va);
 extern uint64_t xnu_ptr_to_va(void* ptr);
 
-//fix file offset and size for segments
 struct mach_header_64* header = xnu_header();
+
+size_t xnu_size = BootArgs.memSize - ((uint64_t)xnu_header() - (uint64_t)BootArgs.physBase);
+size_t dump_size =  xnu_size + KTOP_MEM_USED_SIZE;
+
+//dump patched kernel
+char path[1024] = {0};
+if(fcntl(fd, F_GETPATH, path) == 0) {
+    strlcat(path, ".patched", sizeof(path));
+    int fdout = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if(fdout > 0) {
+
+        lseek(fdout, dump_size, SEEK_SET);
+
+//fix file offset and size for segments
 struct load_command* lc = (struct load_command*)((uint64_t)header + sizeof(*header));
 for (int i = 0; i < header->ncmds; i++) {        
     switch(lc->cmd) {
         case LC_SEGMENT_64: {
             struct segment_command_64 * seg = (struct segment_command_64 *) lc;
-            printf("segment[%d]:%16s   file=0x%llX:0x%llX   vm=0x%llX:0x%llX\n", i, seg->segname, seg->fileoff, seg->filesize, seg->vmaddr, seg->vmsize);
+            //printf("segment[%d]:%-16s   file=0x%llX:0x%llX   vm=0x%llX:0x%llX  flags=0x%08X\n", i, seg->segname, seg->fileoff, seg->filesize, seg->vmaddr, seg->vmsize, seg->flags);
 
             int64_t vmoffset = (uint64_t)seg->vmaddr - xnu_ptr_to_va(header);
-            if(vmoffset>=0 && (vmoffset != seg->fileoff  ||  seg->filesize != seg->vmsize)) {
-                seg->fileoff = vmoffset;
-                seg->filesize = seg->vmsize;
-                printf("fixed segment! -> %p:%p\n", vmoffset, seg->vmsize);
+            if(vmoffset != seg->fileoff  ||  seg->filesize != seg->vmsize)
+            {
+                if(vmoffset >= 0)
+                {
+                    seg->fileoff = vmoffset;
+                    seg->filesize = seg->vmsize;
+                    printf("*** fixed segment[%s] -> %p:%p\n", seg->segname, vmoffset, seg->vmsize);
+                }
+                else
+                {
+                    seg->filesize = seg->vmsize;
+                    seg->fileoff = lseek(fdout, 0, SEEK_CUR);
+                    write(fdout, xnu_va_to_ptr(seg->vmaddr), seg->vmsize);
+                    printf("*** wrote segment[%s] -> %p:%p\n", seg->segname, seg->fileoff, seg->vmsize);
+                    
+                    vmoffset = seg->fileoff;
+                }
             }
 
             struct section_64* sec = (struct section_64*)((uint64_t)seg+sizeof(*seg));
             for(int j=0; j<seg->nsects; j++)
             {
-                printf("*section[%d]:%16s/%16s   offset=0x%X   vm=0x%llX:0x%llX\n", j, sec[j].segname, sec[j].sectname, sec[j].offset, sec[j].addr, sec[j].size);
+                //printf("*section[%d]:%16s/%-16s   offset=0x%X   vm=0x%llX:0x%llX  flags=0x%08X\n", j, sec[j].segname, sec[j].sectname, sec[j].offset, sec[j].addr, sec[j].size, sec[j].flags);
 
-                int64_t vmoffset = (uint64_t)sec[j].addr - xnu_ptr_to_va(header);
-                if(vmoffset>=0 && sec[j].offset && sec[j].size>0 && (vmoffset != sec[j].offset)) {
+                sec[j].flags = 0;
+                
+                int64_t vmsize = sec[j].size;
+                int64_t vmoffset = sec[j].addr - seg->vmaddr + seg->fileoff;
+
+                if(j == (seg->nsects-1)) { // the last/only section
+                    vmsize = seg->vmsize - (sec[j].addr - seg->vmaddr);
+                } else {
+                    vmsize = sec[j+1].addr - sec[j].addr;
+                }
+
+                if(sec[j].offset != vmoffset) {
                     sec[j].offset = vmoffset;
-                    printf("fixed section! ->%p\n", vmoffset);
+                    printf("*** fixed section offset [%s/%s] : %p\n", sec[j].segname, sec[j].sectname, vmoffset);
+                }
+                if(sec[j].size != vmsize) {
+                    sec[j].size = vmsize;
+                    printf("*** fixed section size [%s/%s] : %p\n", sec[j].segname, sec[j].sectname, vmsize);
                 }
             }
+            printf("\n");
+            break;
+        }
+
+        case LC_DYSYMTAB: {
+            struct dysymtab_command* dysymtab = (struct dysymtab_command*)lc;
+            dysymtab->locreloff = 0;
+            dysymtab->ilocalsym = 0;
+            dysymtab->extrefsymoff = 0;
+            dysymtab->iextdefsym = 0;
             break;
         }
     }
     /////////
     lc = (struct load_command *) ((char *)lc + lc->cmdsize);
 }
-
-size_t xnu_size = BootArgs.memSize - ((uint64_t)xnu_header() - (uint64_t)BootArgs.physBase);
-size_t dump_size =  xnu_size + KTOP_MEM_USED_SIZE;
 
 //add topOfKernelData segment
 // struct mach_header_64* header = xnu_header();
@@ -503,16 +553,11 @@ memcpy(cmds_end, &new_segment, sizeof(new_segment));
 header->sizeofcmds += sizeof(new_segment);
 header->ncmds += 1;
 
-//dump patched kernel
-char path[1024] = {0};
-if(fcntl(fd, F_GETPATH, path) == 0) {
-    strlcat(path, ".patched", sizeof(path));
-    printf("Dumping patched kernel to %s\n", path);
-    int fdout = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if(fdout > 0) {
+
+        lseek(fdout, 0, SEEK_SET);
         write(fdout, (void*)xnu_header(), dump_size);
         close(fdout);
-        printf("done.\n");
+        printf("wrote patched kernel to %s\n", path);
     } else {
         fprintf(stderr, "open(%s): %s\n", path, strerror(errno));
     }

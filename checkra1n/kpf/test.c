@@ -224,49 +224,9 @@ bool mach_traps_alt_callback(struct xnu_pf_patch *patch, uint64_t *mach_traps)
     return mach_traps_common(xnu_rebase_va(mach_traps[45 * 3 + 1]));
 }
 
-
-// Imports from shellcode.S
-extern uint32_t shellcode_start[], shellcode_end[];
-static uint32_t shellcode_count;
-static uint32_t *shellcode_area;
-
-static bool kpf_find_shellcode_area_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
-{
-    // For anything else we wouldn't want to disable the patch to make sure that
-    // we only match what we want to, but this is literally just empty space.
-    xnu_pf_disable_patch(patch);
-    shellcode_area = opcode_stream;
-    printf("KPF: Found shellcode area %p %p\n", shellcode_area, xnu_ptr_to_va(shellcode_area));
-    return true;
-}
-
-static void kpf_find_shellcode_area(xnu_pf_patchset_t *xnu_text_exec_patchset)
-{
-    // Find a place inside of the executable region that has no opcodes in it (just zeros/padding)
-    uint32_t count = shellcode_count;
-    // TODO: get rid of this
-    {
-        count += (shellcode_end - shellcode_start);
-    }
-    uint64_t matches[count];
-    uint64_t masks[count];
-    for(size_t i = 0; i < count; ++i)
-    {
-        matches[i] = 0;
-        masks[i] = 0xffffffff;
-    }
-    xnu_pf_maskmatch(xnu_text_exec_patchset, "shellcode_area", matches, masks, count, true, (void*)kpf_find_shellcode_area_callback);
-}
-
-static kpf_component_t kpf_shellcode =
-{
-    .patches =
-    {
-        { NULL, "__TEXT_EXEC", "__text", XNU_PF_ACCESS_32BIT, kpf_find_shellcode_area },
-        {},
-    },
-};
-
+uint32_t shellcode_count = 0;
+uint32_t *shellcode_area = 0;
+void find_shellcode_area(struct mach_header_64* kheader);
 
 static int kpf_compare_patches(const void *a, const void *b)
 {
@@ -303,7 +263,7 @@ kpf_component_t* const kpf_components[] = {
     &kpf_mach_port,
     &kpf_nvram,
     // &kpf_proc_selfname,
-    &kpf_shellcode,
+    // &kpf_shellcode,
     &kpf_spawn_validate_persona,
     // &kpf_overlay,
     // &kpf_ramdisk,
@@ -401,7 +361,15 @@ static void kpf_cmd(const char *cmd, char *args)
             shellcode_count += component->shc_size();
         }
     }
-    printf("shellcode_count=%d\n", shellcode_count);
+    printf("shellcode count=%d size=0x%X\n", shellcode_count, shellcode_count*4);
+
+    find_shellcode_area(hdr);
+
+    if(shellcode_area) {
+        printf("Found shellcode area: %p, %p\n", shellcode_area, xnu_ptr_to_va(shellcode_area));
+    } else {
+        panic("Failed to find shellcode area");
+    }
 
     xnu_pf_patchset_t *patchset = NULL;
     for(size_t i = 0; i < npatches; ++i)
@@ -446,10 +414,6 @@ static void kpf_cmd(const char *cmd, char *args)
             patchset = NULL;
         }
     }
-
-
-    // TODO
-    //struct mach_header_64* accessory_header = xnu_pf_get_kext_header(hdr, "com.apple.iokit.IOAccessoryManager");
 
     xnu_pf_range_t* text_exec_range = xnu_pf_section(hdr, "__TEXT_EXEC", "__text");
     struct mach_header_64* first_kext = xnu_pf_get_first_kext(hdr);
@@ -644,8 +608,13 @@ void module_entry(void)
     command_register("palera1n_flags", "set flags for checkra1n userland", palera1n_flags_cmd);
     command_register("kpf", "running checkra1n-kpf without booting (use bootux afterwards)", kpf_cmd);
     // command_register("overlay", "loads an overlay disk image", kpf_overlay_cmd);
-    command_register("overlay", "alias for loading a trustcache, reusing palera1n", kpf_trustcache_cmd);
-    command_register("trustcache", "loads a trustcache", kpf_trustcache_cmd);
+
+    // command_register("overlay", "alias for loading a trustcache, reusing palera1n", kpf_trustcache_cmd);
+    // command_register("trustcache", "loads a trustcache", kpf_trustcache_cmd);
+
+    command_register("overlay", "alias for uploading shellcode payload data, reusing palera1n", kpf_shellcode_cmd);
+    command_register("shellcode", "upload shellcode payload data", kpf_shellcode_cmd);
+
     command_register("test", "kpf test func", test);
 
 #if defined(DEV_BUILD) || defined(KPF_TEST)

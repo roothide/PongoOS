@@ -145,12 +145,15 @@ ifdef DEV_BUILD
     SHELLCODE_CFLAGS += -DDEV_BUILD
 endif
 $(BUILD)/shellcode: Makefile $(wildcard checkra1n/shellcode/*.c) $(LIB)/fixup/libc.a | $(BUILD)
-	$(EMBEDDED_CC) -o $@ $(wildcard checkra1n/shellcode/*.c) -Os $(SHELLCODE_CFLAGS) -I$(LIB)/include -fno-stack-protector -static -L$(LIB)/fixup -lc \
+	$(EMBEDDED_CC) -o $@ $(wildcard checkra1n/shellcode/*.c) $(SHELLCODE_CFLAGS) -Icheckra1n/shellcode/include -I$(LIB)/include -Iapple-include -L$(LIB)/fixup -lc \
+        -Os -static -mcmodel=large -Werror=return-type -fno-stack-protector -mgeneral-regs-only \
         -Wl,-rename_section,__TEXT,__text,__SHELLCODE,__code \
+        -Wl,-rename_section,__TEXT,__const,__SHELLCODE,__code \
         -Wl,-rename_section,__TEXT,__cstring,__SHELLCODE,__data \
         -Wl,-rename_section,__DATA,__data,__SHELLCODE,__data \
         -Wl,-rename_section,__DATA,__const,__SHELLCODE,__data \
         -Wl,-rename_section,__DATA,__common,__SHELLCODE,__data \
+        -Wl,-rename_section,__DATA,__bss,__SHELLCODE,__data \
         
 
 $(BUILD)/checkra1n-kpf-pongo: $(BUILD)/shellcode

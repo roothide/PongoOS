@@ -52,7 +52,7 @@ static bool kpf_applekeystore_callback(struct xnu_pf_patch *patch, uint32_t *opc
     struct mach_header_64 *aks = xnu_pf_get_kext_header(xnu_header(), "com.apple.driver.AppleSEPKeyStore");
     xnu_pf_range_t *aks_const = xnu_pf_section(aks, "__DATA_CONST", "__const");
     if(!aks_const) {
-        panic("kpf_applekeystore: aks_const not found");
+        aks_const = xnu_pf_section(xnu_header(), "__DATA_CONST", "__const");
     }
 
     for(int i=0; i<aks_const->size/sizeof(uint64_t); i++)

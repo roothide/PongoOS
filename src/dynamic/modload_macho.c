@@ -174,6 +174,7 @@ void modload_buf(unsigned char* buf, uint32_t bufsz) {
                         if (!entrypoint) panic("no entryp");
                         
                         iprintf("[modload_macho:+] Loaded module %s\n", modname ? *modname ? *modname : "<null>" : "<unknown>");
+                        iprintf("[modload_macho:+] module base: %p\n", vma_base);
                         flush_tlb();
                         invalidate_icache();
 

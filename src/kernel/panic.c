@@ -75,7 +75,7 @@ void panic(const char* str, ...) {
    }
 
 #ifdef DEV_BUILD
-   sleep(60*60);
+   //sleep(60*60);
 #else
    sleep(5*60);
 #endif

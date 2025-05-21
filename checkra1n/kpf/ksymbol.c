@@ -105,7 +105,7 @@ uint64_t ksymbol(const char* name)
     }
 
     if(!symtab) {
-        printf("No symtab found");
+        printf("No symtab found\n");
         return 0;
     }
 
@@ -113,7 +113,7 @@ uint64_t ksymbol(const char* name)
     struct nlist_64* symbols64 = (struct nlist_64*)offset_to_ptr(header, symtab->symoff);
 
     if(!strptr || !symbols64) {
-        printf("Unable to get resolve symbols");
+        printf("Unable to get resolve symbols\n");
         return 0;
     }
 
@@ -127,7 +127,7 @@ uint64_t ksymbol(const char* name)
         }
     }
 
-    printf("Unable to find symbol %s", name);
+    printf("Unable to find symbol %s\n", name);
     return 0;
 }
 

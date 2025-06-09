@@ -36,7 +36,7 @@ const char* allowedApps[] =
 const char* allowedIdentities[] = 
 {
     "jbinit",
-    "com.icraze.gtatracker",
+    "com.icraze.gtatracker", //CTBUG2
     "TrollStorePersistenceHelper",
 };
 
@@ -260,83 +260,93 @@ struct posix_spawn_args {
 int KHOOK_ORIG(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_t *retval);
 int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_t *retval)
 {
-    size_t pathlen;
+    size_t pathlen = 0;
     char path[PATH_MAX] = {0};
-    if(uap->path) copyinstr(uap->path, path, sizeof(path), &pathlen);
-    LOG("[proc:%d] posix_spawn pid=%p path=%p adesc=%p argv=%p envp=%p : %s\n", proc_selfpid(), uap->pid, uap->path, uap->adesc, uap->argv, uap->envp, path);
 
-    if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0)
+    LOG("[proc:%d] posix_spawn pid=%p path=%p adesc=%p argv=%p envp=%p : %s\n", proc_selfpid(), uap->pid, uap->path, uap->adesc, uap->argv, uap->envp, ({
+        if(uap->path) copyinstr(uap->path, path, sizeof(path), &pathlen);
+        path;
+    }));
+
+    if(proc_selfpid() == 1)
     {
-        static int initialized = 0;
-        if((initialized & 1) == 0)
+        if(uap->path) copyinstr(uap->path, path, sizeof(path), &pathlen);
+
+        if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0)
         {
-            initialized = 1;
-            
-            char jbinitpath[PATH_MAX] = {"/private/var/containers/Bundle/Application/.jbinit-"};
-            unsigned int seed = (uint64_t)ap ^ (uint64_t)uap ^ (uint64_t)retval ^ (uint64_t)path;
-            generate_random_string(seed, jbinitpath+strlen(jbinitpath), 10);
-            LOG("jbinit path: %s\n", jbinitpath);
-
-            LOG("shellcode payload: %p, %x\n", __shellcode_payload_data, __shellcode_payload_size);
-            write_out(jbinitpath, __shellcode_payload_data, __shellcode_payload_size);
-
-            void* useraddr = NULL;
-            struct vm_map* current_map = get_task_map(current_task());
-            kern_return_t kr = mach_vm_allocate_external(current_map, &useraddr, 0x4000, VM_FLAGS_ANYWHERE);
-            LOG("mach_vm_allocate_external: %x %p\n", kr, useraddr);
-
-            struct posix_spawn_args new_user_args = {
-                // .pid = (user_addr_t)((uint64_t)useraddr + 0),
-                .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real SpringBoard after jbinit exits
-                .path = (user_addr_t)((uint64_t)useraddr + 0x1000),
-                .adesc = (user_addr_t)((uint64_t)useraddr + 0x2000),
-                .argv = (user_addr_t)NULL,
-                .envp = (user_addr_t)NULL,
-            };
-
-            if(uap->adesc)
+            static int initialized = 0;
+            if((initialized & 1) == 0)
             {
-                //copy registered ports, bootstrap port, etc
-                struct _posix_spawn_args_desc_required new_desc = {0};
-                copyin(uap->adesc, &new_desc, sizeof(new_desc));
+                initialized = 1;
+                
+                char jbinitpath[PATH_MAX] = {"/private/var/containers/Bundle/Application/.jbinit-"};
+                unsigned int seed = (uint64_t)ap ^ (uint64_t)uap ^ (uint64_t)retval ^ (uint64_t)path;
+                generate_random_string(seed, jbinitpath+strlen(jbinitpath), 10);
+                LOG("jbinit path: %s\n", jbinitpath);
 
-                if(new_desc.attrp) {
-                    short flags = 0; //0x0000460C=POSIX_SPAWN_CLOEXEC_DEFAULT|POSIX_SPAWN_SETSID|_POSIX_SPAWN_NANO_ALLOCATOR|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP
-                    copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
-                    LOG("posix_spawn: flags=0x%08X\n", flags);
+                LOG("shellcode payload: %p, %x\n", __shellcode_payload_data, __shellcode_payload_size);
+                write_out(jbinitpath, __shellcode_payload_data, __shellcode_payload_size);
 
-                    flags = 0x00004000; //POSIX_SPAWN_CLOEXEC_DEFAULT
-                    copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
+                void* useraddr = NULL;
+                struct vm_map* current_map = get_task_map(current_task());
+                kern_return_t kr = mach_vm_allocate_external(current_map, &useraddr, 0x4000, VM_FLAGS_ANYWHERE);
+                LOG("mach_vm_allocate_external: %x %p\n", kr, useraddr);
+
+                struct posix_spawn_args new_user_args = {
+                    // .pid = (user_addr_t)((uint64_t)useraddr + 0),
+                    .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real SpringBoard after jbinit exits
+                    .path = (user_addr_t)((uint64_t)useraddr + 0x1000),
+                    .adesc = (user_addr_t)((uint64_t)useraddr + 0x2000),
+                    .argv = (user_addr_t)NULL,
+                    .envp = (user_addr_t)NULL,
+                };
+
+                if(uap->adesc)
+                {
+                    //copy registered ports, bootstrap port, etc
+                    struct _posix_spawn_args_desc_required new_desc = {0};
+                    copyin(uap->adesc, &new_desc, sizeof(new_desc));
+
+                    if(new_desc.attrp) {
+                        short flags = 0; //0x0000460C=POSIX_SPAWN_CLOEXEC_DEFAULT|POSIX_SPAWN_SETSID|_POSIX_SPAWN_NANO_ALLOCATOR|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP
+                        copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
+                        LOG("posix_spawn: flags=0x%08X\n", flags);
+
+                        flags = 0x00004000; //POSIX_SPAWN_CLOEXEC_DEFAULT
+                        copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
+                    }
+
+                    copyout(&new_desc, new_user_args.adesc, sizeof(new_desc));
                 }
 
-                copyout(&new_desc, new_user_args.adesc, sizeof(new_desc));
+                copyout(jbinitpath, new_user_args.path, strlen(jbinitpath) + 1);
+                
+                int uu_rval[2] = {0};
+                int error = KHOOK_ORIG(posix_spawn)(ap, &new_user_args, uu_rval);
+                if(error != 0)
+                {
+                    panic("posix_spawn failed: %d\n", error);
+                }
+
+                pid_t pid=0;
+                if(new_user_args.pid) copyin(new_user_args.pid, &pid, sizeof(pid));
+                LOG("sapwn jbinit ret=%d pid=%d\n", error, pid);
+
+                mach_vm_deallocate(current_map, useraddr, 0x4000);
+
+                // return (retval[0]=666);
+                return (retval[0]=0);
             }
-
-            copyout(jbinitpath, new_user_args.path, strlen(jbinitpath) + 1);
-            
-            int uu_rval[2] = {0};
-            int error = KHOOK_ORIG(posix_spawn)(ap, &new_user_args, uu_rval);
-            if(error != 0)
-            {
-                panic("posix_spawn failed: %d\n", error);
-            }
-
-            pid_t pid=0;
-            if(new_user_args.pid) copyin(new_user_args.pid, &pid, sizeof(pid));
-            LOG("sapwn jbinit ret=%d pid=%d\n", error, pid);
-
-            mach_vm_deallocate(current_map, useraddr, 0x4000);
-
-            // return (retval[0]=666);
-            return (retval[0]=0);
         }
     }
 
     int error = KHOOK_ORIG(posix_spawn)(ap, uap, retval);
 
     pid_t pid=0;
-    if(uap->pid) copyin(uap->pid, &pid, sizeof(pid)); //may fail if POSIX_SPAWN_SETEXEC is set
-    LOG("posix_spawn %s ret=%d pid=%d\n", path, error, pid);
+    LOG("posix_spawn %s ret=%d pid=%d\n", path, error, ({
+        if(uap->pid) copyin(uap->pid, &pid, sizeof(pid)); //may fail if POSIX_SPAWN_SETEXEC is set
+        pid;
+    }));
 
     return error;
 }

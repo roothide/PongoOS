@@ -694,10 +694,8 @@ void find_shellcode_area(struct mach_header_64* kheader)
             case LC_SEGMENT_64: {
                 struct segment_command_64 * seg = (struct segment_command_64 *) lc;
 
-                /* these segments will be set to RNX after xnu is started, 
-                    and may also be released in 
-                    arm_vm_init->arm_vm_prot_init 
-                    and kernel_bootstrap_thread->removeKextBootstrap
+                /* these segments will be set to RNX in arm_vm_init->arm_vm_prot_init after xnu is started, 
+                    and may also be released in kernel_bootstrap_thread->removeKextBootstrap
                 */
                 if(strncmp(seg->segname, "__KLD", sizeof(seg->segname)-1) == 0
                     || strncmp(seg->segname, "__LAST", sizeof(seg->segname)-1) == 0)

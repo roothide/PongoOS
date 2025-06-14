@@ -140,7 +140,7 @@ $(BUILD)/Pongo.bin: $(BUILD)/vmacho $(BUILD)/Pongo | $(BUILD)
 $(BUILD)/Pongo: Makefile $(PONGO_C) $(PONGO_H) $(LIB)/fixup/libc.a | $(BUILD)
 	$(EMBEDDED_CC) -o $@ $(PONGO_C) $(EMBEDDED_CC_FLAGS) $(PONGO_CC_FLAGS)
 
-SHELLCODE_CFLAGS = -Wl,-kext -Wall -Wstrict-prototypes -Werror=incompatible-function-pointer-types -ffreestanding -nostdlibinc -fno-blocks -Wno-strict-prototypes -nostdlib -Wl,-dead_strip -Wl,-Z
+SHELLCODE_CFLAGS = --target=arm64-apple-ios12.0 -Wl,-kext -Wall -Wstrict-prototypes -Werror=incompatible-function-pointer-types -ffreestanding -nostdlibinc -fno-blocks -Wno-strict-prototypes -nostdlib -Wl,-dead_strip -Wl,-Z
 ifdef DEV_BUILD
     SHELLCODE_CFLAGS += -DDEV_BUILD
 endif

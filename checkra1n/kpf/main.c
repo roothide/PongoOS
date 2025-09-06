@@ -1005,6 +1005,48 @@ bool sb_ops_callback(struct xnu_pf_patch* patch, uint64_t* sbops_stream) {
     return true;
 }
 
+bool found_apfs_root_hash_new = false;
+bool kpf_apfs_root_hash_new(struct xnu_pf_patch *patch, uint32_t *opcode_stream) {
+    uint32_t* b = find_prev_insn(opcode_stream, 3, 0x14000000, 0xfc000000);
+
+    if (!b) return false;
+
+    uint32_t* cbz = find_next_insn(opcode_stream, 10, 0x34000000, 0xff00001f); // cbz w0, Lvalidated_root_hash
+
+    if (!cbz) return false;
+
+    if ((cbz[-1] & 0xfc000000) != 0x94000000) return false; // bl
+
+    if (found_apfs_root_hash_new)
+        panic("kpf_apfs_root_hash_new: found twice!");
+
+    cbz[-1] = 0x52800000; // mov w0, #0
+
+    found_apfs_root_hash_new = true;
+
+    printf("KPF: found apfs_root_hash_new\n");
+    return true;
+}
+
+void* found_apfs_handle_fsioc_graft = NULL;
+bool kpf_apfs_handle_fsioc_graft_new(struct xnu_pf_patch *patch, uint32_t *opcode_stream) {
+    uint32_t* cbz = find_prev_insn(opcode_stream, 20, 0x34000000, 0xff00001f); // cbz w0, Lvalidated_payload_and_manifest
+
+    if (!cbz) return false;
+
+    if ((cbz[-1] & 0xfc000000) != 0x94000000) return false; // bl
+
+    if (found_apfs_handle_fsioc_graft && found_apfs_handle_fsioc_graft != cbz)
+        panic("kpf_apfs_handle_fsioc_graft_new: found twice!");
+
+    cbz[-1] = 0x52800000; // mov w0, #0
+
+    found_apfs_handle_fsioc_graft = cbz;
+
+    printf("KPF: found apfs_handle_fsioc_graft_new\n");
+    return true;
+}
+
 bool found_apfs_rename = false;
 bool kpf_apfs_patches_rename(struct xnu_pf_patch* patch, uint32_t* opcode_stream) {
     if (
@@ -1121,7 +1163,7 @@ bool kpf_apfs_root_snapshot_name(struct xnu_pf_patch *patch, uint32_t *opcode_st
     return true;
 }
 
-void kpf_apfs_patches(xnu_pf_patchset_t* patchset, bool have_ssv, bool apfs_vfsop_mount_string_match) {
+void kpf_apfs_patches(xnu_pf_patchset_t* patchset, bool have_ssv, bool apfs_vfsop_mount_string_match, bool ipad6_ipados18) {
     // there is a check in the apfs mount function that makes sure that the kernel task is calling this function (current_task() == kernel_task)
     // we also want to call it so we patch that check out
     // example from i7 13.3:
@@ -1272,6 +1314,46 @@ void kpf_apfs_patches(xnu_pf_patchset_t* patchset, bool have_ssv, bool apfs_vfso
 
         xnu_pf_maskmatch(patchset,
         "apfs_root_snapshot_name", root_snapshot_matches, root_snapshot_masks, sizeof(root_snapshot_matches) / sizeof(uint64_t), true ,(void *)kpf_apfs_root_snapshot_name);
+    }
+
+    if (ipad6_ipados18) {
+        // Patch root hash verification
+
+        uint64_t root_hash_new_matches[] = {
+            0xd3430c02 // ubfx x2, xN, #3, #1
+        };
+
+        uint64_t root_hash_new_masks[] = {
+            0xfffffc1f
+        };
+
+        xnu_pf_maskmatch(patchset,
+        "apfs_graft_new", root_hash_new_matches, root_hash_new_masks, sizeof(root_hash_new_matches) / sizeof(uint64_t), true ,(void *)kpf_apfs_root_hash_new);
+
+        // Patch root hash image4 verification
+
+        uint64_t handle_fsioc_graft_matches[] = {
+            0xaa1003e0, // mov x0, x{16-31}
+            0xaa1003e1, // mov x1, x{16-31}
+            0xaa1003e3, // mov x3, x{16-31}
+            0xd2800004, // mov x4, #0
+            0xd2800005, // mov x5, #0
+            0xaa1003e6, // mov x6, x{16-31}
+            0x14000000  // b
+        };
+
+        uint64_t handle_fsioc_graft_masks[] = {
+            0xfff0ffff,
+            0xfff0ffff,
+            0xfff0ffff,
+            0xffffffff,
+            0xffffffff,
+            0xfff0ffff,
+            0xfc000000
+        };
+
+        xnu_pf_maskmatch(patchset,
+        "handle_fsioc_graft_new", handle_fsioc_graft_matches, handle_fsioc_graft_masks, sizeof(handle_fsioc_graft_matches) / sizeof(uint64_t), false ,(void *)kpf_apfs_handle_fsioc_graft_new);
     }
 }
 static uint32_t* amfi_ret;
@@ -2347,6 +2429,19 @@ static void kpf_cmd(void)
     if (!apfs_vfsop_mount_string_match)
         strlcat((char*)((int64_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView), " rootdev=md0", 0x270);
 
+    const char root_hash_string[] = "%s:%d: %s Failed to authenticate root hash (volume type %d): %d\n";
+    const char* root_hash_string_match = apfs_text_cstring_range ? memmem(apfs_text_cstring_range->cacheable_base, apfs_text_cstring_range->size, root_hash_string, sizeof(root_hash_string)) : NULL;
+    if (!root_hash_string_match) root_hash_string_match = memmem(text_cstring_range->cacheable_base, text_cstring_range->size, root_hash_string, sizeof(root_hash_string));
+
+    const char graft_image4_string[] = "%s:%d: %s Failed to validate image4 payload and manifest for grafting: %d\n";
+    const char* graft_image4_string_match = apfs_text_cstring_range ? memmem(apfs_text_cstring_range->cacheable_base, apfs_text_cstring_range->size, graft_image4_string, sizeof(graft_image4_string)) : NULL;
+    if (!graft_image4_string_match) graft_image4_string_match = memmem(text_cstring_range->cacheable_base, text_cstring_range->size, graft_image4_string, sizeof(graft_image4_string));
+
+    if (gKernelVersion.darwinMajor < 24 || xnu_platform() != PLATFORM_IOS) {
+        graft_image4_string_match = NULL;
+        root_hash_string_match = NULL;
+    }
+
     xnu_pf_range_t* bootdata_range = xnu_pf_section(hdr, "__BOOTDATA", "__init");
     xnu_pf_range_t* const_klddata_range = xnu_pf_section(hdr, "__KLDDATA", "__const");
 
@@ -2392,6 +2487,51 @@ static void kpf_cmd(void)
 #endif
 
     bool protobox_used = (protobox_string_match != NULL && gKernelVersion.xnuMajor >= 8792);
+
+    bool ipad6_ipados18 = false;
+#if !defined(KPF_TEST)
+    char* model = dt_prop(gDeviceTree, "model", NULL);
+    if (gKernelVersion.darwinMajor >= 24 &&
+        (strcmp(model, "iPad7,5") == 0 || strcmp(model, "iPad7,6") == 0)) {
+            ipad6_ipados18 = true;
+    }
+
+    if (ipad6_ipados18) {
+        puts("Fixing up bootargs");
+
+        dt_node_t *memory_map = dt_node(gDeviceTree, "/chosen/memory-map");
+        struct memmap *map = dt_alloc_memmap(memory_map, "FunnyBootArgs");
+        if(!map)
+        {
+            panic("Failed to allocate FunnyBootArgs memory map");
+        }
+
+        struct boot_args* cBootArgs = (struct boot_args*)((uint64_t)gBootArgs - 0x800000000 + kCacheableView);
+        struct boot_args* new_BootArgs = alloc_static(0x4000);
+        bzero(new_BootArgs, sizeof(struct boot_args));
+        new_BootArgs->Revision = 3;
+        new_BootArgs->Version = 2;
+        new_BootArgs->virtBase = cBootArgs->virtBase;
+        new_BootArgs->physBase = cBootArgs->physBase;
+        new_BootArgs->memSize = cBootArgs->memSize;
+        new_BootArgs->topOfKernelData = cBootArgs->topOfKernelData;
+        memcpy(&new_BootArgs->Video, &cBootArgs->Video, sizeof(struct Boot_Video));
+        new_BootArgs->machineType = cBootArgs->machineType;
+        new_BootArgs->deviceTreeLength = cBootArgs->deviceTreeLength;
+        new_BootArgs->deviceTreeP = cBootArgs->deviceTreeP;
+        memcpy(new_BootArgs->iOS18.CommandLine, cBootArgs->iOS13.CommandLine, BOOT_LINE_LENGTH_iOS13);
+        new_BootArgs->iOS18.bootFlags = cBootArgs->iOS13.bootFlags;
+        new_BootArgs->iOS18.memSizeActual = cBootArgs->iOS13.memSizeActual;
+        gBootArgs = (void*)(((uint64_t)new_BootArgs) + 0x800000000 - kCacheableView);
+        map->addr = ((uint64_t)new_BootArgs) + 0x800000000 - kCacheableView;
+        map->size = 0x4000;
+
+        *(uint32_t*)dt_prop(dt_find(gDeviceTree, "/chosen"), "debug-enabled", NULL) = 1;
+    }
+#else
+    if (gKernelVersion.darwinMajor >= 24 && xnu_platform() == PLATFORM_IOS)
+        ipad6_ipados18 = true;
+#endif
 
     for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
     {
@@ -2460,7 +2600,7 @@ static void kpf_cmd(void)
         }
     }
 
-    kpf_apfs_patches(apfs_patchset, livefs_string_match != NULL, apfs_vfsop_mount_string_match != NULL);
+    kpf_apfs_patches(apfs_patchset, livefs_string_match != NULL, apfs_vfsop_mount_string_match != NULL, ipad6_ipados18);
 #if 0
     if(livefs_string_match)
     {

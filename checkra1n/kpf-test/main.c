@@ -92,6 +92,12 @@ typedef struct boot_args
             uint64_t bootFlags;
             uint64_t memSizeActual;
         } iOS13;
+		struct {
+			char			CommandLine[0x400];
+			uint32_t		__pad;
+			uint64_t		bootFlags;
+			uint64_t		memSizeActual;
+		} iOS18;
     };
 } __attribute__((packed)) boot_args;
 

@@ -33,6 +33,7 @@
 #include <mach-o/loader.h>
 #include <pongo.h>
 #include <xnu/xnu.h>
+#include <paleinfo.h>
 
 /********** ********** ********** ********** ********** Defines ********** ********** ********** ********** **********/
 
@@ -66,13 +67,15 @@ typedef const struct
 // shc_emit returns the actual number of instructions that were emitted.
 typedef const struct
 {
-    void     (*init)(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, checkrain_option_t kpf_flags, checkrain_option_t checkra1n_flags); // Flags are input only
-    void     (*finish)(struct mach_header_64 *hdr, checkrain_option_t *checkra1n_flags); // Flags are to be treated as output only
-    void     (*bootprep)(struct mach_header_64 *hdr, checkrain_option_t checkra1n_flags); // Flags are input only
+    void     (*init)(struct mach_header_64 *hdr, xnu_pf_range_t *cstring);
+    void     (*finish)(struct mach_header_64 *hdr);
+    void     (*bootprep)(struct mach_header_64 *hdr);
     uint32_t (*shc_size)(void);
     uint32_t (*shc_emit)(uint32_t *shellcode_area);
     kpf_patch_t patches[];
 } kpf_component_t;
+
+extern palerain_option_t palera1n_flags;
 
 /********** ********** ********** ********** ********** Helpers ********** ********** ********** ********** **********/
 

@@ -33,11 +33,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 static bool have_ramdisk = false;
 static char *rootdev_bootarg = NULL;
 static uint32_t *rootdev_patchpoint = NULL;
-static int32_t fakefs_offset = 0;
 
 static bool kpf_rootdev_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
 {
@@ -105,7 +105,7 @@ extern palerain_option_t palera1n_flags;
 static bool gHasConstriants = false;
 extern struct kernel_version gKernelVersion;
 
-static void kpf_ramdisk_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, palerain_option_t palera1n_flags)
+static void kpf_ramdisk_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {
     char *bootargs = (char*)((uintptr_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView);
     rootdev_bootarg = strstr(bootargs, "rootdev=");
@@ -118,13 +118,6 @@ static void kpf_ramdisk_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring
     const char *constraints_string_match = memmem(cstring->cacheable_base, cstring->size, constraints_string, sizeof(constraints_string));
     gHasConstriants = (constraints_string_match != NULL);
 
-    if (gKernelVersion.xnuMajor >= 10002 /* iOS 17 */
-    && strstr(gKernelVersion.kernel_version_string, "root:xnu-10002.0.40.") == NULL /* iOS 17.0 beta 1 */) {
-        if (xnu_platform() == PLATFORM_IOS) fakefs_offset = 1;
-    }
-
-    if (gKernelVersion.xnuMajor >= 11215 && xnu_platform() == PLATFORM_IOS) fakefs_offset++; /* iOS 18+ */
-
 #ifdef DEV_BUILD
     have_ramdisk = true;
 #else
@@ -132,29 +125,7 @@ static void kpf_ramdisk_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring
 #endif
 }
 
-#if !defined(KPF_TEST)
-static const char* disk_prefix(void) {
-    if (gKernelVersion.darwinMajor >= 19) {
-        if (xnu_platform() == PLATFORM_TVOS) {
-            if (gHasConstriants) {
-                return "disk2s";
-            } else {
-                return "disk0s2s";
-            }
-        } else {
-            if (gHasConstriants) {
-                return "disk1s";
-            } else {
-                return "disk0s1s";
-            }
-        }
-    } else {
-        return "disk0s1s";
-    }
-}
-#endif
-
-static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr, palerain_option_t palera1n_flags)
+static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
 {
 
     if(rootdev_bootarg)
@@ -166,7 +137,6 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr, palerain_option_t p
     char BSDName[16] = "disk0s1s1";
 #else
     char BSDName[16];
-    uint32_t partid = 1;
     /* have SSV and rootful */
     if ((palera1n_flags & (palerain_option_rootful | palerain_option_ssv)) == (palerain_option_rootful | palerain_option_ssv)) {
         dt_node_t* chosen = dt_find(gDeviceTree, "chosen");
@@ -175,26 +145,17 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr, palerain_option_t p
         char* nvram_proxy_data = dt_prop(chosen, "nvram-proxy-data", &nvram_proxy_data_len);
         if (!nvram_proxy_data) panic("invalid devicetree: no /chosen/nvram-proxy-data!");
         char* nvram_rootdev = memmem(nvram_proxy_data, nvram_proxy_data_len, "p1-fakefs-rootdev=", 18);
-        if (nvram_rootdev) snprintf(BSDName, 16, "%s", &nvram_rootdev[18]);
+        if (!nvram_rootdev)
+            panic("p1-fakefs-rootdev is not found.\n"
+                  "Please ensure that there is a fakefs.\n"
+                  "If there is a fakefs, load it in palera1n 2.0.1 first.\n");
+
+        snprintf(BSDName, 16, "%s", &nvram_rootdev[18]);
 
         size_t root_matching_len = 0;
         char* root_matching = dt_prop(chosen, "root-matching", &root_matching_len);
         if (!root_matching) panic("invalid devicetree: no prop!");
-        if (!nvram_rootdev) {
-            dt_node_t* fstab = dt_find(gDeviceTree, "fstab");
-            if (!fstab) panic("invalid devicetree: no fstab!"); /* iOS 12 and below should not have SSV */
-            size_t max_fs_entries_len = 0;
-            uint32_t* max_fs_entries = dt_prop(fstab, "max_fs_entries", &max_fs_entries_len);
-            if (!max_fs_entries) panic("invalid devicetree: no prop!");
-            uint32_t* patch = (uint32_t*)max_fs_entries;
-            printf("fstab max_fs_entries: %016" PRIx64 ": %08x\n", (uint64_t)max_fs_entries, patch[0]);
-            dt_node_t* baseband = dt_find(gDeviceTree, "baseband");
-            if (baseband) partid = patch[0] + 1U;
-            else partid = patch[0];
-            if (socnum == 0x7000 || socnum == 0x7001) partid--;
-            partid += fakefs_offset;
-            snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix(), partid);
-        }
+
         /* Don't root from fakefs during fakefs setup or force revert */
         if ((palera1n_flags & (palerain_option_setup_rootful | palerain_option_force_revert)) == 0)
         snprintf(root_matching, root_matching_len, 
@@ -205,8 +166,7 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr, palerain_option_t p
         printf("KPF: root BSD Name: %s\n", BSDName);
         printf("KPF: root_matching (raw): %s\n", root_matching);
     } else {
-        snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix() , partid);
-        printf("KPF: root BSD Name: %s\n", BSDName);
+        printf("KPF: root BSD Name unchanged\n");
     }
 #endif
 

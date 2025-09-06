@@ -332,7 +332,7 @@ static void kpf_nvram_patches(xnu_pf_patchset_t *xnu_text_exec_patchset)
     xnu_pf_maskmatch(xnu_text_exec_patchset, "nvram_unlock", matches_184, masks_184, sizeof(matches_184)/sizeof(uint64_t), false, (void*)kpf_nvram_table_dumb_callback);
 }
 
-static void kpf_nvram_finish(struct mach_header_64 *hdr, checkrain_option_t *checkra1n_flags)
+static void kpf_nvram_finish(struct mach_header_64 *hdr)
 {
 #ifdef DEV_BUILD
     // Treat this patch as optional in release

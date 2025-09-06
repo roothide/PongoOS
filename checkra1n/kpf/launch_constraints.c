@@ -110,7 +110,7 @@ static void kpf_launch_constraints_patch(xnu_pf_patchset_t *patchset)
     xnu_pf_maskmatch(patchset, "launch_constraints", matches_184, masks_184, sizeof(matches_184)/sizeof(uint64_t), false, (void*)kpf_launch_constraints_callback);
 }
 
-static void kpf_launch_constraints_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, checkrain_option_t kpf_flags, checkrain_option_t checkra1n_flags)
+static void kpf_launch_constraints_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {
     const char constraints_string[] = "mac_proc_check_launch_constraints";
     const char *constraints_string_match = memmem(cstring->cacheable_base, cstring->size, constraints_string, sizeof(constraints_string));
@@ -134,7 +134,7 @@ static void kpf_launch_constraints_patches(xnu_pf_patchset_t *amfi_text_exec_pat
     }
 }
 
-static void kpf_launch_constraints_finish(struct mach_header_64 *hdr, checkrain_option_t *checkra1n_flags)
+static void kpf_launch_constraints_finish(struct mach_header_64 *hdr)
 {
     if(need_launch_constraints_patch && !found_launch_constraints)
     {

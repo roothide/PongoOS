@@ -32,7 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
-#include <kerninfo.h>
+#include <paleinfo.h>
 
 #ifdef PONGO_PRIVATE
 #include "framebuffer/fb.h"

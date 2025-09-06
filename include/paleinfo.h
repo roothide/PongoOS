@@ -9,7 +9,13 @@
 #ifndef PALEINFO_H
 #define PALEINFO_H
 
+/* Included for compatability with paleinfo.h */
+#include <stdbool.h>
+#include <stdlib.h>
+/* END included for compatability with paleinfo.h */
+
 #include <stdint.h>
+
 
 #define PALEINFO_VERSION 2U
 typedef uint64_t palerain_option_t;

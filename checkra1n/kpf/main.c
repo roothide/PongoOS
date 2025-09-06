@@ -31,12 +31,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mach-o/loader.h>
-#include <kerninfo.h>
+#include <paleinfo.h>
 #include <mac.h>
 #include <pongo.h>
 #include <xnu/xnu.h>
 
 uint32_t offsetof_p_flags;
+palerain_option_t palera1n_flags;
 
 #if 0
         // AES, sigh
@@ -1514,8 +1515,6 @@ static int kpf_compare_patches(const void *a, const void *b)
     return (int)one->granule - (int)two->granule;
 }
 
-static checkrain_option_t kpf_flags, checkra1n_flags;
-
 static void kpf_cmd(void)
 {
     static bool kpf_didrun = false;
@@ -1625,7 +1624,7 @@ static void kpf_cmd(void)
         kpf_component_t *component = kpf_components[i];
         if(component->init)
         {
-            component->init(hdr, text_cstring_range, kpf_flags, checkra1n_flags);
+            component->init(hdr, text_cstring_range);
         }
     }
 
@@ -1897,7 +1896,7 @@ static void kpf_cmd(void)
     {
         if(kpf_components[i]->finish)
         {
-            kpf_components[i]->finish(hdr, &checkra1n_flags);
+            kpf_components[i]->finish(hdr);
         }
     }
 
@@ -1905,11 +1904,11 @@ static void kpf_cmd(void)
     {
         if(kpf_components[i]->bootprep)
         {
-            kpf_components[i]->bootprep(hdr, checkra1n_flags);
+            kpf_components[i]->bootprep(hdr);
         }
     }
 
-    if(checkrain_option_enabled(kpf_flags, checkrain_option_verbose_boot))
+    if(palera1n_flags & palerain_option_verbose_boot)
     {
         gBootArgs->Video.v_display = 0;
     }
@@ -1918,28 +1917,23 @@ static void kpf_cmd(void)
     printf("KPF: Applied patchset in %llu ms\n", (tick_1 - tick_0) / TICKS_IN_1MS);
 }
 
-static void set_flags(char *args, uint32_t *flags, const char *name)
+static void set_flags(char *args, uint64_t *flags, const char *name)
 {
     if(args[0] != '\0')
     {
-        uint32_t val = strtoul(args, NULL, 16);
-        printf("Setting %s to 0x%08x\n", name, val);
+        uint64_t val = strtoull(args, NULL, 16);
+        printf("Setting %s to 0x%16llx\n", name, val);
         *flags = val;
     }
     else
     {
-        printf("%s: 0x%08x\n", name, *flags);
+        printf("%s: 0x%06llx\n", name, *flags);
     }
 }
 
-static void checkra1n_flags_cmd(const char *cmd, char *args)
+static void palera1n_flags_cmd(const char *cmd, char *args)
 {
-    set_flags(args, &checkra1n_flags, "checkra1n_flags");
-}
-
-static void kpf_flags_cmd(const char *cmd, char *args)
-{
-    set_flags(args, &kpf_flags, "kpf_flags");
+    set_flags(args, &palera1n_flags, "palera1n_flags");
 }
 
 void module_entry(void)
@@ -1968,8 +1962,7 @@ void module_entry(void)
     puts("#==================");
 
     preboot_hook = kpf_cmd;
-    command_register("checkra1n_flags", "set flags for checkra1n userland", checkra1n_flags_cmd);
-    command_register("kpf_flags", "set flags for kernel patchfinder", kpf_flags_cmd);
+    command_register("palera1n_flags", "set flags for palera1n", palera1n_flags_cmd);
     command_register("kpf", "running checkra1n-kpf without booting (use bootux afterwards)", (void*)kpf_cmd);
     command_register("overlay", "loads an overlay disk image", kpf_overlay_cmd);
 }

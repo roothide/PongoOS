@@ -127,7 +127,6 @@ uint32_t* follow_call(uint32_t *from)
     return target;
 }
 
-#ifdef DEV_BUILD
 struct kernel_version gKernelVersion;
 static void kpf_kernel_version_init(xnu_pf_range_t *text_const_range)
 {
@@ -205,7 +204,6 @@ static void kpf_kernel_version_init(xnu_pf_range_t *text_const_range)
 
     printf("Detected Kernel version Darwin: %d.%d.%d xnu: %d.%d.%d.%d.%d~%d machine: %04hx\n", gKernelVersion.darwinMajor, gKernelVersion.darwinMinor, gKernelVersion.darwinRevision, gKernelVersion.xnuMajor, gKernelVersion.xnuMinor, gKernelVersion.xnuPatch, gKernelVersion.xnuFlags, gKernelVersion.xnuRevision, gKernelVersion.xnuRun, gKernelVersion.machineConfig);
 }
-#endif
 
 // Imports from shellcode.S
 extern uint32_t sandbox_shellcode[], sandbox_shellcode_setuid_patch[], sandbox_shellcode_ptrs[], sandbox_shellcode_end[];
@@ -2391,11 +2389,9 @@ static void kpf_cmd(void)
     struct mach_header_64* hdr = xnu_header();
     xnu_pf_range_t* text_cstring_range = xnu_pf_section(hdr, "__TEXT", "__cstring");
 
-#ifdef DEV_BUILD
     xnu_pf_range_t *text_const_range = xnu_pf_section(hdr, "__TEXT", "__const");
     kpf_kernel_version_init(text_const_range);
     free(text_const_range);
-#endif
 
     // extern struct mach_header_64* xnu_pf_get_kext_header(struct mach_header_64* kheader, const char* kext_bundle_id);
 

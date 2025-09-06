@@ -102,7 +102,6 @@ static inline int64_t adrp_off(uint32_t adrp)
     return sxt64((((((uint64_t)adrp >> 5) & 0x7ffffULL) << 2) | (((uint64_t)adrp >> 29) & 0x3ULL)) << 12, 33);
 }
 
-#ifdef DEV_BUILD
 extern struct kernel_version
 {
     uint32_t darwinMajor;
@@ -116,7 +115,6 @@ extern struct kernel_version
     uint32_t xnuRun;
     uint16_t machineConfig;
 } gKernelVersion;
-#endif
 
 /********** ********** ********** ********** ********** Components ********** ********** ********** ********** **********/
 

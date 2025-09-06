@@ -1617,7 +1617,32 @@ static void kpf_cmd(void)
         (gKernelVersion.darwinMajor >= 24 &&  gKernelVersion.darwinMinor >= 2 && xnu_platform() == PLATFORM_TVOS)))
             panic("livefs panic doesn't match expected Darwin version");
 #endif
+
+#ifdef DEV_BUILD
+    if (gKernelVersion.xnuMajor >= 7195 != (const_klddata_range != NULL)) {
+        if (gKernelVersion.xnuMajor == 7195 && gKernelVersion.darwinMinor > 4) panic("__KLDDATA __const existence does not match expected Darwin version");
+    }
 #endif
+
+    const char *thid_should_crash_string_match = NULL;
+    if (bootdata_range) {
+        const char thid_should_crash_string[] = "thid_should_crash";
+        thid_should_crash_string_match = memmem(bootdata_range->cacheable_base, bootdata_range->size, thid_should_crash_string, sizeof(thid_should_crash_string) - 1);
+
+        if (const_klddata_range && !thid_should_crash_string_match) {
+            thid_should_crash_string_match = memmem(const_klddata_range->cacheable_base, const_klddata_range->size, thid_should_crash_string, sizeof(thid_should_crash_string) - 1);
+        }
+
+#ifdef DEV_BUILD
+        // 17.0 beta 1 onwards
+        if(((thid_should_crash_string_match != NULL) != gKernelVersion.xnuMajor >= 10002)) panic("thid_should_crash string doesn't match expected Darwin version");
+#endif
+        if (thid_should_crash_string_match && !strstr((char*)((int64_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView), "thid_should_crash="))
+        {
+            strlcat((char*)((int64_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView), " thid_should_crash=0", 0x270);
+            DEVLOG("Applied thid_should_crash=0 boot arg");
+        }
+    }
 
     for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
     {

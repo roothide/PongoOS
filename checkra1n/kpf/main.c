@@ -209,6 +209,7 @@ static void kpf_kernel_version_init(xnu_pf_range_t *text_const_range)
 
 // Imports from shellcode.S
 extern uint32_t sandbox_shellcode[], sandbox_shellcode_setuid_patch[], sandbox_shellcode_ptrs[], sandbox_shellcode_end[];
+extern uint32_t launchd_execve_hook[], launchd_execve_hook_ptr[], launchd_execve_hook_offset[], launchd_execve_hook_pagesize[], launchd_execve_hook_mach_vm_allocate_kernel[];
 
 uint32_t* _mac_mount = NULL;
 bool kpf_has_done_mac_mount;
@@ -1654,6 +1655,315 @@ void kpf_root_livefs_patch(xnu_pf_patchset_t* patchset) {
 }
 #endif
 
+
+uint32_t* mdevremoveall = NULL;
+uint32_t* mac_execve = NULL;
+uint32_t* mac_execve_hook = NULL;
+uint32_t* copyout = NULL;
+uint32_t* mach_vm_allocate_kernel = NULL;
+uint32_t current_map_off = -1;
+uint32_t vm_map_page_size_off = -1;
+bool mach_vm_allocate_kernel_new = false;
+
+bool IOSecureBSDRoot_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
+{
+    // Prevent ramdisk from being cleaned even when booted without rootdev="md0"
+    if(mdevremoveall)
+    {
+        DEVLOG("IOSecureBSDRoot_callback: already ran, skipping...");
+        return false;
+    }
+    puts("KPF: Found mdevremoveall");
+    DEVLOG("Found mdevremoveall 0x%" PRIx64, xnu_rebase_va(xnu_ptr_to_va(opcode_stream)) + 4*4);
+    
+    uint32_t insn = opcode_stream[4];
+    int32_t off = sxt32(insn >> 5, 19);
+    opcode_stream[4] = 0x14000000 | (uint32_t)off;
+    mdevremoveall = opcode_stream;
+    return true;
+}
+
+bool load_init_program_at_path_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
+{
+    puts("KPF: Found load_init_program_at_path");
+    uint32_t* bl = find_next_insn(opcode_stream, 8, 0x94000000, 0xfc000000);
+    if(!bl) return false;
+    opcode_stream = bl;
+    
+    mac_execve = follow_call(opcode_stream);
+    mac_execve_hook = opcode_stream;
+    puts("KPF: Found mac_execve");
+    
+    //uint32_t* prebl = find_prev_insn(opcode_stream, 0x80, 0x52800302, 0xffffffff);
+    //bl = find_next_insn(prebl, 10, 0x94000000, 0xfc000000); // bl
+    //
+    //copyout = follow_call(bl);
+    //puts("KPF: Found copyout");
+    
+    // Most reliable marker of a stack frame seems to be "add x29, sp, 0x...".
+    // And this function is HUGE, hence up to 2k insn.
+    uint32_t *frame = find_prev_insn(opcode_stream, 2000, 0x910003fd, 0xff8003ff);
+    if(!frame) return false;
+    
+    // Now find the insn that decrements sp. This can be either
+    // "stp ..., ..., [sp, -0x...]!" or "sub sp, sp, 0x...".
+    // Match top bit of imm on purpose, since we only want negative offsets.
+    uint32_t  *start = find_prev_insn(frame, 10, 0xa9a003e0, 0xffe003e0);
+    if(!start) start = find_prev_insn(frame, 10, 0xd10003ff, 0xff8003ff);
+    if(!start) return false;
+
+#if 0
+    uint32_t* match = opcode_stream;
+    
+    while(1) {
+        if(
+           ((match[0] & 0xfff0ffff) == 0xaa1003e0) && // mov x0, x{16-30}
+           ((match[1] & 0xfc000000) == 0x94000000) && // bl _strlen
+           ((match[2] & 0xfffffff0) == 0x91000410) && // add x{16-30}, x0, #1
+           ((match[3] & 0xfffffe1f) == 0xf100121f) && // cmp x{16-30}, #4
+           ((match[4] & 0xff000000) == 0x54000000) && // b.hs
+           ((match[5] & 0x9f000000) == 0x90000000) && // adrp
+           ((match[6] & 0xff000000) == 0x91000000) && // add
+           ((match[7] & 0xfff0ffff) == 0xaa1003e1) && // mov x1, x{16-30}
+           ((match[8] & 0xfff0ffff) == 0xaa1003e2) && // mov x2, x{16-30}
+           ((match[9] & 0xfc000000) == 0x94000000)    // bl _copyout
+           )
+        {
+            // found
+            match += 9;
+            copyout = follow_call(match);
+            puts("KPF: Found copyout");
+            break;
+        }
+        match--;
+        if(match == start) {
+            panic("copyout not found");
+            return false;
+        }
+    }
+#endif
+    
+    /* xxx */
+    uint32_t *tpidr_el1 = find_next_insn(start, 0x20, 0xd538d080, 0xffffff80); // search mrs xN, tpidr_el1
+    if(!tpidr_el1) return false;
+    uint32_t reg = tpidr_el1[0] & 0x1f;
+    
+    uint32_t *ldr = find_next_insn(tpidr_el1, 10, 0xf9400000 | (reg << 5), 0xffc000e0 | (reg << 5)); // search ldr xM, [xN, #xxx]
+    if(!ldr) return false;
+    current_map_off = ((ldr[0] >> 10) & 0xfff) << 3;
+    printf("KPF: Found current_map_offset at 0x%x\n", current_map_off);
+    
+    reg = ldr[0] & 0x1f;
+    
+    uint32_t *ldrh = find_next_insn(ldr, 10, 0x79400000 | (reg << 5), 0xffc000e0 | (reg << 5));
+    if(ldrh)
+    {
+        // 1st: search ldrh
+        vm_map_page_size_off = ((ldrh[0] >> 11) & 0x7FF) << 2;
+        printf("KPF: Found vm_map_page_size offset at 0x%x\n", vm_map_page_size_off);
+    }
+    else
+    {
+        // 2nd: xnu-8019: search add
+        uint32_t *add = find_next_insn(ldr, 10, 0x91000000 | (reg << 5), 0xffc000e0 | (reg << 5));
+        if(!add) return false;
+        vm_map_page_size_off = (add[0] >> 10) & 0xfff;
+        printf("KPF: Found vm_map_page_size offset at 0x%x\n", vm_map_page_size_off);
+    }
+    
+    bl = NULL;
+    for(int i = 0; i < 0x80; i++)
+    {
+        if(start[i]     == 0x52800023 && // movz w3, #0x1
+           start[i + 1] == 0x52800004)   // movz w4, #0
+        {
+            bl = find_next_insn(start + i, 10, 0x94000000, 0xfc000000); // bl
+            if(bl) break;
+        }
+    }
+    if (!bl) {
+        for(int i = 0; i < 0x30; i++)
+        {
+            if (
+                (start[i    ] & 0xffffffe0) == 0x52800020 && // mov wN, #0x1
+                (start[i + 1] & 0xffe0fc1f) == 0x1ac02002 && // mov w2, wN, wM
+                (start[i + 2] & 0xffc003ff) == 0x910003e1 && // add x1, sp, ...
+                (start[i + 3] & 0xffffffff) == 0xd2800003    // mov x3, #0x0
+            )
+            {
+                if ((start[i + 4] & 0xfc000000) == 0x94000000)   // bl
+                    bl = &start[i + 4];
+                else if (
+                    (start[i + 4] & 0xffffffff) == 0xd2800004 && // mov x4, #0x0
+                    (start[i + 5] & 0xfc000000) == 0x94000000
+                )
+                    bl = &start[i + 5];
+                else
+                    return false;
+                mach_vm_allocate_kernel_new = true;
+                break;
+            }
+        }
+    }
+    
+    if (!bl) return false;
+
+    mach_vm_allocate_kernel = follow_call(bl);
+    puts("KPF: Found mach_vm_allocate_kernel");
+    
+    return true;
+}
+
+bool copyout_callsites_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream) {
+    // Don't match inlined copyout
+    if (find_prev_insn(opcode_stream-1, 20, 0x52801102, 0xffffffff)) return false; /* mov w2, #0x88 */
+    if (find_prev_insn(opcode_stream-1, 20, 0x52800e82, 0xffffffff)) return false; /* mov w2, #0x74 */
+
+    uint32_t* candidate = follow_call(&opcode_stream[1]);
+    if (!copyout) {
+        copyout = candidate;
+        puts("KPF: Found copyout");
+        return true;
+    }
+    if (candidate != copyout) {
+        panic("KPF: Found multiple copyout candidates");
+    }
+    return true;
+}
+
+void kpf_md0oncores_patch(xnu_pf_patchset_t* patchset)
+{
+    uint64_t matches[] =
+    {
+        0xd63f0100, // blr  x8
+        0x52805828, // mov  w8, #0x2c1
+        0x72bc0008, // movk w8, #0xe000, lsl #16
+        0x6b08001f, // cmp  wN, w8
+        0x54000001, // b.ne 0x...
+    };
+    uint64_t masks[] =
+    {
+        0xffffffff,
+        0xffffffff,
+        0xffffffff,
+        0xfffffc1f,
+        0xff00001f,
+    };
+    xnu_pf_maskmatch(patchset, "IOSecureBSDRoot", matches, masks, sizeof(masks)/sizeof(uint64_t), true, (void*)IOSecureBSDRoot_callback);
+    
+    /* i7 15.7.6
+     * fffffff0075cd178    stp     x21, x23, [sp, #0x38]
+     * fffffff0075cd17c    stp     xzr, xzr, [sp, #0x48]
+     * fffffff0075cd180    add     x1, sp, #0x38
+     * fffffff0075cd184    mov     x0, x19
+     * fffffff0075cd188    bl      __mac_execve
+     * fffffff0075cd18c    cbnz    w0, loc_fffffff0075cd1c4
+     */
+    uint64_t i_matches[] =
+    {
+        0xa903dff5, // stp  x21, x23, [sp, #0x38]
+        0xa904ffff, // stp  xzr, xzr, [sp, #0x48]
+        0x9100e3e1, // add  x1, sp, #0x38
+        0xaa1303e0, // mov  x0, x19
+        0x94000000, // bl   __mac_execve
+        0x35000000, // cbnz wN, ...
+    };
+    uint64_t i_masks[] =
+    {
+        0xffffffff,
+        0xffffffff,
+        0xffffffff,
+        0xffffffff,
+        0xfc000000,
+        0xff00001f,
+    };
+    xnu_pf_maskmatch(patchset, "load_init_program_at_path", i_matches, i_masks, sizeof(i_masks)/sizeof(uint64_t), false, (void*)load_init_program_at_path_callback);
+    
+    // xnu-7090 - xnu-7938
+    uint64_t ii_matches[] =
+    {
+        0xa9005ff5, // stp  x21, x23, [sp, ...]
+        0xa9007fff, // stp  xzr, xzr, [sp, ...]
+        0x910003e1, // add  x1, sp, ...
+        0x910003e2, // add  x2, sp, ...
+        0xaa1303e0, // mov  x0, x19
+        0x94000000, // bl   __mac_execve
+        0x35000000, // cbnz w0, ...
+    };
+    uint64_t ii_masks[] =
+    {
+        0xffc07fff,
+        0xffc07fff,
+        0xffc003ff,
+        0xffc003ff,
+        0xffffffff,
+        0xfc000000,
+        0xff00001f,
+    };
+    xnu_pf_maskmatch(patchset, "load_init_program_at_path", ii_matches, ii_masks, sizeof(ii_masks)/sizeof(uint64_t), false, (void*)load_init_program_at_path_callback);
+
+    // xnu-10063
+    uint64_t iii_matches[] = {
+        0xa903dbf5, // stp x21, x22, [sp, #0x38]
+        0xa904ffff, // stp xzr, xzr, [sp, #0x48]
+        0x9100e3e1, // add x1, sp, #0x38
+        0xaa1303e0, // mov x0, x19
+        0x94000000, // bl __mac_execve
+        0x35000000, // cbnz w0, ...
+    };
+
+    uint64_t iii_masks[] =
+    {
+        0xffffffff,
+        0xffffffff,
+        0xffffffff,
+        0xffffffff,
+        0xfc000000,
+        0xff00001f,
+    };
+    xnu_pf_maskmatch(patchset, "load_init_program_at_path", iii_matches, iii_masks, sizeof(iii_matches)/sizeof(uint64_t), false, (void*)load_init_program_at_path_callback);
+
+    // Find callsite(s) of copyout function
+    // Might match more than once but as long as they point the same address it's fine
+    // Note: In older iOS versions the cbnz instruction could be cbz, but we don't need it here
+    // /x 0211805200000094f00300aa00000035:ffffffff000000fcf003ffff000000ff
+    uint64_t copyout_matches[] =
+    {
+        0x52801102, // mov w2, #0x88
+        0x94000000, // bl copyout
+        0xaa0003f0, // mov x{16-31}, x0
+        0x34000000  // cb(n)z wN, ...
+    };
+
+    uint64_t copyout_masks[] =
+    {
+        0xffffffff,
+        0xfc000000,
+        0xffff03f0,
+        0xfe000000
+    };
+    xnu_pf_maskmatch(patchset, "copyout_callsites", copyout_matches, copyout_masks, sizeof(copyout_matches)/sizeof(uint64_t), false, (void*)copyout_callsites_callback);
+
+    // iOS 18.4+
+    // /x 820e805200000094f00300aa00000034:ffffffff000000fcf0ffffff1f0000ff
+
+    uint64_t copyout_matches2[] = {
+        0x52800e82, // mov w2, #0x74
+        0x94000000, // bl copyout
+        0xaa0003f0, // mov x{16-31}, x0
+        0x34000000  // cbz w0, ...
+    };
+
+    uint64_t copyout_masks2[] = {
+        0xffffffff,
+        0xfc000000,
+        0xfffffff0,
+        0xff00001f
+    };
+
+    xnu_pf_maskmatch(patchset, "copyout_callsites", copyout_matches2, copyout_masks2, sizeof(copyout_matches)/sizeof(uint64_t), false, (void*)copyout_callsites_callback);
+}
+
 static uint32_t shellcode_count;
 static uint32_t *shellcode_area;
 
@@ -2019,6 +2329,10 @@ static void kpf_cmd(void)
     kpf_vm_map_protect_patch(xnu_text_exec_patchset);
     kpf_mac_vm_fault_enter_patch(xnu_text_exec_patchset);
     kpf_find_shellcode_funcs(xnu_text_exec_patchset);
+    if(apfs_vfsop_mount_string_match)
+    {
+        kpf_md0oncores_patch(xnu_text_exec_patchset);
+    }
     if(rootvp_string_match) // Union mounts no longer work
     {
         kpf_vnop_rootvp_auth_patch(xnu_text_exec_patchset);
@@ -2127,8 +2441,43 @@ static void kpf_cmd(void)
     uint32_t* repatch_vnode_shellcode = &shellcode_area[4];
     *repatch_vnode_shellcode = repatch_ldr_x19_vnode_pathoff;
 
-    if(!livefs_string_match) // Only patch snapshot without SSV
+    if(apfs_vfsop_mount_string_match)
     {
+        if (!mdevremoveall) panic("no mdevremoveall");
+        if (!mac_execve) panic("no mac_execve");
+        if (!mac_execve_hook) panic("no mac_execve_hook");
+        if (!copyout) panic("no copyout");
+        if (!mach_vm_allocate_kernel) panic("no mach_vm_allocate_kernel");
+        if (current_map_off == -1 || vm_map_page_size_off == -1) panic("no offsets");
+
+        uint64_t* repatch_launchd_execve_hook_ptrs = (uint64_t*)(launchd_execve_hook_ptr - shellcode_from + shellcode_to);
+        uint32_t* repatch_launchd_execve_hook = (uint32_t*)(launchd_execve_hook - shellcode_from + shellcode_to);
+        uint32_t* repatch_launchd_execve_hook_offset = (uint32_t*)(launchd_execve_hook_offset - shellcode_from + shellcode_to);
+        uint32_t* repatch_launchd_execve_hook_pagesize = (uint32_t*)(launchd_execve_hook_pagesize - shellcode_from + shellcode_to);
+        uint32_t* repatch_launchd_execve_hook_mach_vm_allocate_kernel = (uint32_t*)(launchd_execve_hook_mach_vm_allocate_kernel - shellcode_from + shellcode_to);
+
+        if (repatch_launchd_execve_hook_ptrs[0] != 0x4141414141414141) {
+            panic("Shellcode corruption");
+        }
+
+        repatch_launchd_execve_hook_ptrs[0] = xnu_ptr_to_va(mac_execve);
+        repatch_launchd_execve_hook_ptrs[1] = xnu_ptr_to_va(_mac_mount);
+        repatch_launchd_execve_hook_ptrs[2] = xnu_ptr_to_va(mach_vm_allocate_kernel);
+        repatch_launchd_execve_hook_ptrs[3] = xnu_ptr_to_va(copyout);
+
+        repatch_launchd_execve_hook_offset[0] |= ((current_map_off >> 3) & 0xfff) << 10;
+        repatch_launchd_execve_hook_offset[2] |= ((vm_map_page_size_off >> 2) & 0x7ff) << 11;
+
+        if (socnum != 0x8960 && socnum != 0x7000 && socnum != 0x7001) *repatch_launchd_execve_hook_pagesize = NOP;
+        if (!mach_vm_allocate_kernel_new) *repatch_launchd_execve_hook_mach_vm_allocate_kernel = NOP;
+
+        uint32_t delta = (&repatch_launchd_execve_hook[0]) - mac_execve_hook;
+        delta &= 0x03ffffff;
+        delta |= 0x94000000;
+        *mac_execve_hook = delta;
+    }
+
+    if(!livefs_string_match) { // Only patch snapshot without SSV
         char *snapshotString = (char*)memmem((unsigned char *)text_cstring_range->cacheable_base, text_cstring_range->size, (uint8_t *)"com.apple.os.update-", strlen("com.apple.os.update-"));
         if (!snapshotString) snapshotString = (char*)memmem((unsigned char *)plk_text_range->cacheable_base, plk_text_range->size, (uint8_t *)"com.apple.os.update-", strlen("com.apple.os.update-"));
         if (!snapshotString) panic("no snapshot string");
@@ -2152,6 +2501,10 @@ static void kpf_cmd(void)
         *snapshotString = 'x';
         puts("KPF: Disabled snapshot temporarily");
     }
+
+    char *launchdString = (char*)memmem((unsigned char *)text_cstring_range->cacheable_base, text_cstring_range->size, (uint8_t *)"/sbin/launchd", sizeof("/sbin/launchd"));
+    if (!launchdString) panic("no launchd string");
+    snprintf(launchdString, sizeof("/sbin/launchd"), "/cores/ploosh");
 
     // TODO: tmp
     shellcode_area = shellcode_to;

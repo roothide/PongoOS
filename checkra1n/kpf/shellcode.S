@@ -296,6 +296,47 @@ mountpoint:
 
 .align 2
 _launchd_execve_hook_end:
+
+.globl _proc_set_syscall_filter_mask_shc
+.globl _proc_set_syscall_filter_mask_shc_target
+.globl _zalloc_ro_mut
+.globl one_area
+one_area:
+.balign 0x100, 0xff
+
+_proc_set_syscall_filter_mask_shc:
+cbz x2, _proc_set_syscall_filter_mask_shc_target
+sub sp, sp, 0x40
+stp x19, x20, [sp, 0x10]
+stp x21, x22, [sp, 0x20]
+stp x29, x30, [sp, 0x30]
+mov x19, x0
+mov x20, x1
+mov x21, x2
+mov x22, x3
+mov x8, #8
+mov x0, x17
+mov x1, x21
+mov x2, #0
+adr x3, one_area
+udiv x4, x22, x8
+msub x10, x4, x8, x22
+cbz x10, Lbl_zalloc_ro_mut
+add x4, x4, #1
+Lbl_zalloc_ro_mut:
+bl _zalloc_ro_mut
+mov x0, x19
+mov x1, x20
+mov x2, x21
+mov x3, x22
+ldp x19, x20, [sp, 0x10]
+ldp x21, x22, [sp, 0x20]
+ldp x29, x30, [sp, 0x30]
+add sp, sp, 0x40
+_proc_set_syscall_filter_mask_shc_target:
+b .
+_zalloc_ro_mut:
+b .
 _sandbox_shellcode_end:
 
 

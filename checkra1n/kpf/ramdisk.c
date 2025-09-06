@@ -155,9 +155,7 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
         memcpy(rootdev_bootarg, "spartan", 7); // rootdev -> spartan
     }
 
-#if defined(KPF_TEST)
-    char BSDName[16] = "disk0s1s1";
-#else
+#if !defined(KPF_TEST)
     char BSDName[16];
     /* have SSV and rootful */
     if ((palera1n_flags & (palerain_option_rootful | palerain_option_ssv)) == (palerain_option_rootful | palerain_option_ssv)) {
@@ -192,7 +190,6 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
         snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix() , 1);
         printf("KPF: root BSD Name unchanged\n");
     }
-#endif
 
     if(ramdisk_size)
     {
@@ -219,6 +216,7 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
         *(uint32_t*)(ramdisk_buf) = ramdisk_size;
         ramdisk_size += 0x10000;
     }
+#endif
 }
 
 static uint32_t kpf_ramdisk_size(void)

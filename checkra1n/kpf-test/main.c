@@ -44,9 +44,12 @@
 #include <mach-o/loader.h>
 #include <libkern/OSCacheControl.h>
 #include <TargetConditionals.h>
+#include <paleinfo.h>
 #if TARGET_OS_OSX
 #   include <pthread.h>
 #endif
+
+extern uint64_t palera1n_flags;
 
 #define SWAP32(x) (((x & 0xff000000) >> 24) | ((x & 0xff0000) >> 8) | ((x & 0xff00) << 8) | ((x & 0xff) << 24))
 
@@ -415,6 +418,7 @@ static void __attribute__((noreturn)) process_kernel(int fd)
     gEntryPoint = (void*)((uintptr_t)mem + (entry - lowest));
 
     printf("Kernel at 0x%llx, entry at 0x%llx", (uint64_t)mem, (uint64_t)gEntryPoint);
+    palera1n_flags = palerain_option_rootful;
 
     module_entry();
     preboot_hook();

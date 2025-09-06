@@ -2574,7 +2574,11 @@ static void kpf_cmd(void)
         repatch_launchd_execve_hook_offset[0] |= ((current_map_off >> 3) & 0xfff) << 10;
         repatch_launchd_execve_hook_offset[2] |= ((vm_map_page_size_off >> 2) & 0x7ff) << 11;
 
-        if (socnum != 0x8960 && socnum != 0x7000 && socnum != 0x7001) *repatch_launchd_execve_hook_pagesize = NOP;
+#if !defined(KPF_TEST)
+        if (socnum != 0x8960 && socnum != 0x7000 && socnum != 0x7001)
+#endif
+            *repatch_launchd_execve_hook_pagesize = NOP;
+
         if (!mach_vm_allocate_kernel_new) *repatch_launchd_execve_hook_mach_vm_allocate_kernel = NOP;
 
         uint32_t delta = (&repatch_launchd_execve_hook[0]) - mac_execve_hook;

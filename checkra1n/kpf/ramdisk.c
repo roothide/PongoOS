@@ -125,6 +125,28 @@ static void kpf_ramdisk_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring
 #endif
 }
 
+#if !defined(KPF_TEST)
+static const char* disk_prefix(void) {
+    if (gKernelVersion.darwinMajor >= 19) {
+        if (xnu_platform() == PLATFORM_TVOS) {
+            if (gHasConstriants) {
+                return "disk2s";
+            } else {
+                return "disk0s2s";
+            }
+        } else {
+            if (gHasConstriants) {
+                return "disk1s";
+            } else {
+                return "disk0s1s";
+            }
+        }
+    } else {
+        return "disk0s1s";
+    }
+}
+#endif
+
 static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
 {
 
@@ -166,6 +188,8 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
         printf("KPF: root BSD Name: %s\n", BSDName);
         printf("KPF: root_matching (raw): %s\n", root_matching);
     } else {
+        // this is required for root-on-md0
+        snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix() , 1);
         printf("KPF: root BSD Name unchanged\n");
     }
 #endif

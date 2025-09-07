@@ -2416,7 +2416,8 @@ static void kpf_cmd(void)
     // iOS/iPadOS 15.0 beta 1 or tvOS 18.2 beta 1 onwards
     if((livefs_string_match != NULL) != (
         (gKernelVersion.darwinMajor >= 21 && xnu_platform() == PLATFORM_IOS) ||
-        (gKernelVersion.darwinMajor >= 24 &&  gKernelVersion.darwinMinor >= 2 && xnu_platform() == PLATFORM_TVOS)))
+        (((gKernelVersion.darwinMajor >= 24 && gKernelVersion.darwinMinor >= 2)
+            || gKernelVersion.darwinMajor >= 25) && xnu_platform() == PLATFORM_TVOS)))
             panic("livefs panic doesn't match expected Darwin version");
 #endif
 

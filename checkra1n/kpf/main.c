@@ -2489,7 +2489,7 @@ static void kpf_cmd(void)
     bool ipad6_ipados18 = false;
 #if !defined(KPF_TEST)
     char* model = dt_prop(gDeviceTree, "model", NULL);
-    if (gKernelVersion.darwinMajor >= 24 &&
+    if (gKernelVersion.darwinMajor == 24 &&
         (strcmp(model, "iPad7,5") == 0 || strcmp(model, "iPad7,6") == 0)) {
             ipad6_ipados18 = true;
     }
@@ -2527,7 +2527,7 @@ static void kpf_cmd(void)
         *(uint32_t*)dt_prop(dt_find(gDeviceTree, "/chosen"), "debug-enabled", NULL) = 1;
     }
 #else
-    if (gKernelVersion.darwinMajor >= 24 && xnu_platform() == PLATFORM_IOS)
+    if (gKernelVersion.darwinMajor == 24 && xnu_platform() == PLATFORM_IOS)
         ipad6_ipados18 = true;
 #endif
 

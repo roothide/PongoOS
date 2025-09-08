@@ -1055,6 +1055,10 @@ bool kpf_apfs_patches_rename(struct xnu_pf_patch* patch, uint32_t* opcode_stream
     // don't match resource fork stuffs
     if (find_next_insn(opcode_stream, 0x20, 0x37180008, 0xfff8001f)) // tbnz w8, #0x3, ...
         return false;
+    
+    // Resource fork part 2 (bridgeOS 10)
+    if (find_next_insn(opcode_stream, 10, 0x90000004, 0x9f00001f)) // adrp x4, ...
+        return false;
 
     if (found_apfs_rename)
         panic("APFS rename: Found twice!");

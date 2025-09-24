@@ -164,30 +164,32 @@ static void kpf_ramdisk_bootprep(struct mach_header_64 *hdr)
         size_t nvram_proxy_data_len = 0;
         char* nvram_proxy_data = dt_prop(chosen, "nvram-proxy-data", &nvram_proxy_data_len);
         if (!nvram_proxy_data) panic("invalid devicetree: no /chosen/nvram-proxy-data!");
-        char* nvram_rootdev = memmem(nvram_proxy_data, nvram_proxy_data_len, "p1-fakefs-rootdev=", 18);
-        if (!nvram_rootdev)
-            panic("p1-fakefs-rootdev is not found.\n"
-                  "Please ensure that there is a fakefs.\n"
-                  "If there is a fakefs, load it in palera1n 2.0.1 first.\n");
-
-        snprintf(BSDName, 16, "%s", &nvram_rootdev[18]);
 
         size_t root_matching_len = 0;
         char* root_matching = dt_prop(chosen, "root-matching", &root_matching_len);
         if (!root_matching) panic("invalid devicetree: no prop!");
 
+        // this is required for root-on-md0
+        snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix() , 1);
+
         /* Don't root from fakefs during fakefs setup or force revert */
-        if ((palera1n_flags & (palerain_option_setup_rootful | palerain_option_force_revert)) == 0)
-        snprintf(root_matching, root_matching_len, 
-            "<dict ID=\"0\"><key>IOProviderClass</key><string ID=\"1\">IOService</string><key>BSD Name</key><string ID=\"2\">%s</string></dict>",
-            BSDName);
-        else
+        if ((palera1n_flags & (palerain_option_setup_rootful | palerain_option_force_revert)) == 0) {
+            char* nvram_rootdev = memmem(nvram_proxy_data, nvram_proxy_data_len, "p1-fakefs-rootdev=", 18);
+            if (!nvram_rootdev)
+                panic("p1-fakefs-rootdev is not found.\n"
+                      "Please ensure that there is a fakefs.\n"
+                      "If there is a fakefs, load it in palera1n 2.0.1 first.\n");
+
+            snprintf(BSDName, 16, "%s", &nvram_rootdev[18]);
+            snprintf(root_matching, root_matching_len,
+                "<dict ID=\"0\"><key>IOProviderClass</key><string ID=\"1\">IOService</string><key>BSD Name</key><string ID=\"2\">%s</string></dict>",
+                BSDName);
+        } else {
             printf("KPF: rooting from original rootfs for fakefs setup or force revert\n");
+        }
         printf("KPF: root BSD Name: %s\n", BSDName);
         printf("KPF: root_matching (raw): %s\n", root_matching);
     } else {
-        // this is required for root-on-md0
-        snprintf(BSDName, 16, "%s%" PRIu32, disk_prefix() , 1);
         printf("KPF: root BSD Name unchanged\n");
     }
 

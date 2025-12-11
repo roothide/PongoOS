@@ -34,9 +34,11 @@
 #include <stdio.h>
 #include <string.h>
 
-extern uint32_t fsctl_shc[], fsctl_shc_vnode_open[], fsctl_shc_stolen_slowpath[], fsctl_shc_orig_bl[], fsctl_shc_vnode_close[], fsctl_shc_stolen_fastpath[], fsctl_shc_orig_b[], fsctl_shc_end[];
-
 static bool do_bind_mounts = false;
+
+// not used in palera1n
+#if 0
+extern uint32_t fsctl_shc[], fsctl_shc_vnode_open[], fsctl_shc_stolen_slowpath[], fsctl_shc_orig_bl[], fsctl_shc_vnode_close[], fsctl_shc_stolen_fastpath[], fsctl_shc_orig_b[], fsctl_shc_end[];
 
 static uint32_t *fsctl_patchpoint = NULL;
 static uint64_t vnode_open_addr = 0, vnode_close_addr = 0;
@@ -140,6 +142,7 @@ static void kpf_fsctl_dev_by_role_patch(xnu_pf_patchset_t *xnu_text_exec_patchse
     };
     xnu_pf_maskmatch(xnu_text_exec_patchset, "vnode_open_close", vn_matches, vn_masks, sizeof(vn_masks)/sizeof(uint64_t), true, (void*)kpf_vnode_open_close_callback);
 }
+#endif
 
 static bool kpf_shared_region_root_dir_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
 {
@@ -250,7 +253,9 @@ static void kpf_bindfs_patches(xnu_pf_patchset_t *xnu_text_exec_patchset)
     // iOS 15.0: Union mounts no longer work
     if(do_bind_mounts)
     {
+#if 0
         kpf_fsctl_dev_by_role_patch(xnu_text_exec_patchset);
+#endif
         kpf_shared_region_root_dir_patch(xnu_text_exec_patchset);
     }
 }
@@ -278,6 +283,7 @@ static void kpf_bindfs_finish(struct mach_header_64 *hdr)
         palera1n_flags |= palerain_option_bind_mount;
 }
 
+#if 0
 static uint32_t kpf_bindfs_size(void)
 {
     if(!do_bind_mounts)
@@ -335,13 +341,16 @@ static uint32_t kpf_bindfs_emit(uint32_t *shellcode_area)
 
     return fsctl_shc_end - fsctl_shc;
 }
+#endif
 
 kpf_component_t kpf_bindfs =
 {
     .init = kpf_bindfs_init,
     .finish = kpf_bindfs_finish,
+#if 0
     .shc_size = kpf_bindfs_size,
     .shc_emit = kpf_bindfs_emit,
+#endif
     .patches =
     {
         { NULL, "__TEXT_EXEC", "__text", XNU_PF_ACCESS_32BIT, kpf_bindfs_patches },

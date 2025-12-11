@@ -532,7 +532,7 @@ L_kdi_shc_ramfile:
 _kdi_shc_end:
 
 
-
+#if 0
 .globl _fsctl_shc
 .globl _fsctl_shc_vnode_open
 .globl _fsctl_shc_stolen_slowpath
@@ -609,3 +609,4 @@ L_fsctl_shc_mnt:
     .asciz "/fs/orig"
 .align 2
 _fsctl_shc_end:
+#endif

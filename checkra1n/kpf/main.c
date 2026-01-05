@@ -2494,7 +2494,7 @@ static void kpf_cmd(void)
 #if !defined(KPF_TEST)
     char* model = dt_prop(gDeviceTree, "model", NULL);
     if (gKernelVersion.darwinMajor == 24 &&
-        (strcmp(model, "iPad7,5") == 0 || strcmp(model, "iPad7,6") == 0)) {
+        (strcmp(model, "iPad7,1") == 0 || strcmp(model, "iPad7,2") == 0 || strcmp(model, "iPad7,3") == 0 || strcmp(model, "iPad7,4") == 0 || strcmp(model, "iPad7,5") == 0 || strcmp(model, "iPad7,6") == 0)) {
             ipad6_ipados18 = true;
     }
 

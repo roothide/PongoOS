@@ -13,14 +13,14 @@ static bool need_applekeystore_patch = false;
 
 static uint64_t* externalMethod_vtable_ptr = NULL;
 
-static void kpf_applekeystore_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, palerain_option_t palera1n_flags)
+static void kpf_applekeystore_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {    
     if(socnum == 0x8015) {
         need_applekeystore_patch = true;
     }
 }
 
-static void kpf_applekeystore_finish(struct mach_header_64 *hdr, palerain_option_t *palera1n_flags)
+static void kpf_applekeystore_finish(struct mach_header_64 *hdr)
 {
     if(!need_applekeystore_patch) return;
 

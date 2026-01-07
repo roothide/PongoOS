@@ -609,7 +609,7 @@ L_fsctl_shc_mnt:
     .asciz "/fs/orig"
 .align 2
 _fsctl_shc_end:
-
+#endif
 
 
 .align 2

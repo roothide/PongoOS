@@ -745,7 +745,7 @@ void build_shellcode_payload()
     *(uint32_t*)shellcode_symbol_ptr("___shellcode_payload_size") = shellcode_payload_size;
 }
 
-static void kpf_shellcode_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, palerain_option_t palera1n_flags)
+static void kpf_shellcode_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {
     did_run = true;
 
@@ -759,7 +759,7 @@ static void kpf_shellcode_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstri
     khook_function("mac_vnode_check_signature", NULL);
 }
 
-static void kpf_shellcode_finish(struct mach_header_64 *hdr, palerain_option_t *palera1n_flags)
+static void kpf_shellcode_finish(struct mach_header_64 *hdr)
 {
     build_shellcode();
     build_kernelhooks();

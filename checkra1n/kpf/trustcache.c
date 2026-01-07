@@ -214,7 +214,7 @@ struct trust_cache0 {
     trust_cache_hash0 hashes[];
 } __attribute__((__packed__));
 
-static void kpf_trustcache_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring, palerain_option_t palera1n_flags)
+static void kpf_trustcache_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {
     did_run = true;
 }
@@ -318,7 +318,7 @@ static uint32_t kpf_trustcache_emit(uint32_t *shellcode_area)
     int64_t patch_off = shellcode_addr - patchpoint_addr;
     if(patch_off > 0x7fffffcLL || patch_off < -0x8000000LL)
     {
-        panic("trustcache_patch_new jump too far: 0x%" PRIx64 "", patch_off);
+        panic("trustcache_patch_new jump too far: 0x%llx", patch_off);
     }
     *trustcache_patchpoint = 0x14000000 | ((patch_off >> 2) & 0x03ffffff);
 

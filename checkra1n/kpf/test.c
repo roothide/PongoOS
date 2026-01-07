@@ -37,7 +37,7 @@
 #include <xnu/xnu.h>
 
 uint32_t offsetof_p_flags;
-palerain_option_t palera1n_flags = 0;
+palerain_option_t palera1n_flags;
 
 #if defined(KPF_TEST)
 extern bool test_force_rootful;
@@ -79,7 +79,7 @@ uint32_t* follow_call(uint32_t *from)
     uint32_t op = *from;
     if((op & 0x7c000000) != 0x14000000)
     {
-        DEVLOG("follow_call 0x%" PRIx64 " is not B or BL", xnu_ptr_to_va(from));
+        DEVLOG("follow_call 0x%llx is not B or BL", xnu_ptr_to_va(from));
         return NULL;
     }
     uint32_t *target = from + sxt32(op, 26);
@@ -94,39 +94,86 @@ uint32_t* follow_call(uint32_t *from)
         uint64_t ptr = *(uint64_t*)(page + ((((uint64_t)target[1] >> 10) & 0xfffULL) << 3));
         target = xnu_va_to_ptr(kext_rebase_va(ptr));
     }
-    DEVLOG("followed call from 0x%" PRIx64 " to 0x%" PRIx64 "", xnu_ptr_to_va(from), xnu_ptr_to_va(target));
+    DEVLOG("followed call from 0x%llx to 0x%llx", xnu_ptr_to_va(from), xnu_ptr_to_va(target));
     return target;
 }
 
 struct kernel_version gKernelVersion;
 static void kpf_kernel_version_init(xnu_pf_range_t *text_const_range)
 {
-    const char* kernelVersionStringMarker = "@(#)VERSION: Darwin Kernel Version ";
+    const char kernelVersionStringMarker[] = "@(#)VERSION: Darwin Kernel Version ";
     const char *kernelVersionString = memmem(text_const_range->cacheable_base, text_const_range->size, kernelVersionStringMarker, strlen(kernelVersionStringMarker));
     if(kernelVersionString == NULL)
     {
-        kernelVersionStringMarker = "Darwin Kernel Version ";
-        kernelVersionString = memmem(text_const_range->cacheable_base, text_const_range->size, kernelVersionStringMarker, strlen(kernelVersionStringMarker));
-        if(kernelVersionString == NULL) panic("No kernel version string found");
+        panic("No kernel version string found");
     }
-    gKernelVersion.kernel_version_string = kernelVersionString;
     const char *start = kernelVersionString + strlen(kernelVersionStringMarker);
     char *end = NULL;
     errno = 0;
+
     gKernelVersion.darwinMajor = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != '.') panic("Error parsing darwin version");
     start = end+1;
     gKernelVersion.darwinMinor = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != '.') panic("Error parsing darwin version");
     start = end+1;
     gKernelVersion.darwinRevision = strtoimax(start, &end, 10);
-    if(errno) panic("Error parsing kernel version");
+    if(errno || *end != ':') panic("Error parsing darwin version");
+
     start = strstr(end, "root:xnu");
     if(start) start = strchr(start + strlen("root:xnu"), '-');
-    if(!start) panic("Error parsing kernel version");
+    if(!start) panic("Error parsing xnu version");
     gKernelVersion.xnuMajor = strtoimax(start+1, &end, 10);
-    if(errno) panic("Error parsing kernel version");
-    printf("Detected Kernel version Darwin: %d.%d.%d xnu: %d\n", gKernelVersion.darwinMajor, gKernelVersion.darwinMinor, gKernelVersion.darwinRevision, gKernelVersion.xnuMajor);
+    if(errno) panic("Error parsing xnu version");
+    if(*end == '.')
+    {
+        start = end+1;
+        gKernelVersion.xnuMinor = strtoimax(start, &end, 10);
+        if(errno || *end != '.') panic("Error parsing xnu version");
+        start = end+1;
+        gKernelVersion.xnuPatch = strtoimax(start, &end, 10);
+        if(errno) panic("Error parsing xnu version");
+        if(*end == '.')
+        {
+            start = end+1;
+            gKernelVersion.xnuFlags = strtoimax(start, &end, 10);
+            if(errno) panic("Error parsing xnu version");
+            if(*end == '.')
+            {
+                start = end+1;
+                gKernelVersion.xnuRevision = strtoimax(start, &end, 10);
+                if(errno) panic("Error parsing xnu version");
+            }
+            else
+            {
+                // If we have only four groups, then we assume "patch" is missing.
+                gKernelVersion.xnuRevision = gKernelVersion.xnuFlags;
+                gKernelVersion.xnuFlags = gKernelVersion.xnuPatch;
+                gKernelVersion.xnuPatch = 0;
+            }
+        }
+    }
+    if(*end != '~') panic("Error parsing xnu version");
+    start = end+1;
+    gKernelVersion.xnuRun = strtoimax(start, &end, 10);
+    if(errno || *end != '/') panic("Error parsing xnu version");
+
+    start = strrchr(end + 1, '_');
+    if(!start) panic("Error parsing machine config");
+    start += 1;
+    // This is ghetto because machineConfig doesn't differentiate between the two A9 flavours or A9X, A10 vs T2,
+    // and a lot of the time not even between A10 and A10X, A8 vs A8X, etc... obviously not consistent across versions either.
+    // But we need something that works in kpf-test, and this is exclusive to DEV_BUILD anyway, so whatever.
+    if  (strcmp(start, "S5L8960X") == 0) gKernelVersion.machineConfig = 0x8960;
+    else if(strcmp(start, "T7000") == 0) gKernelVersion.machineConfig = 0x7000;
+    else if(strcmp(start, "T7001") == 0) gKernelVersion.machineConfig = 0x7001;
+    else if(strcmp(start, "S8000") == 0) gKernelVersion.machineConfig = 0x8000;
+    else if(strcmp(start, "T8010") == 0) gKernelVersion.machineConfig = 0x8010;
+    else if(strcmp(start, "T8011") == 0) gKernelVersion.machineConfig = 0x8011;
+    else if(strcmp(start, "T8015") == 0) gKernelVersion.machineConfig = 0x8015;
+    else                                 panic("Unknown machine config: %s", start);
+
+    printf("Detected Kernel version Darwin: %d.%d.%d xnu: %d.%d.%d.%d.%d~%d machine: %04hx\n", gKernelVersion.darwinMajor, gKernelVersion.darwinMinor, gKernelVersion.darwinRevision, gKernelVersion.xnuMajor, gKernelVersion.xnuMinor, gKernelVersion.xnuPatch, gKernelVersion.xnuFlags, gKernelVersion.xnuRevision, gKernelVersion.xnuRun, gKernelVersion.machineConfig);
 }
 
 
@@ -274,7 +321,7 @@ kpf_component_t* const kpf_components[] = {
     &kpf_shellcode_roothide,
 };
 
-static void kpf_cmd(const char *cmd, char *args)
+static void kpf_cmd(void)
 {
     static bool kpf_didrun = false;
     if(kpf_didrun)
@@ -320,12 +367,6 @@ static void kpf_cmd(const char *cmd, char *args)
         }
     }
 
-    if (dt_node_u32(dt_get("/chosen"), "board-id", 0) == 0x02 && socnum == 0x8011) {
-        if (!strstr((char*)((int64_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView), "AppleEmbeddedUSBArbitrator-force-usbdevice=")) {
-            strlcat((char*)((int64_t)gBootArgs->iOS13.CommandLine - 0x800000000 + kCacheableView), " AppleEmbeddedUSBArbitrator-force-usbdevice=1", 0x270);
-        }
-    }
-
     qsort(patches, npatches, sizeof(kpf_patch_t*), kpf_compare_patches);
 
 
@@ -344,7 +385,7 @@ static void kpf_cmd(const char *cmd, char *args)
         kpf_component_t *component = kpf_components[i];
         if(component->init)
         {
-            component->init(hdr, text_cstring_range, palera1n_flags);
+            component->init(hdr, text_cstring_range);
         }
     }
 
@@ -450,20 +491,20 @@ static void kpf_cmd(const char *cmd, char *args)
         panic("Missing patch: mach_traps");
     }
 
-     for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
-     {
-         kpf_component_t *component = kpf_components[i];
-         if(component->shc_emit)
-         {
-             shellcode_area += component->shc_emit(shellcode_area);
-         }
-     }
+    for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
+    {
+        kpf_component_t *component = kpf_components[i];
+        if(component->shc_emit)
+        {
+            shellcode_area += component->shc_emit(shellcode_area);
+        }
+    }
 
     for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
     {
         if(kpf_components[i]->finish)
         {
-            kpf_components[i]->finish(hdr, &palera1n_flags);
+            kpf_components[i]->finish(hdr);
         }
     }
 
@@ -471,7 +512,7 @@ static void kpf_cmd(const char *cmd, char *args)
     {
         if(kpf_components[i]->bootprep)
         {
-            kpf_components[i]->bootprep(hdr, palera1n_flags);
+            kpf_components[i]->bootprep(hdr);
         }
     }
 
@@ -481,20 +522,20 @@ static void kpf_cmd(const char *cmd, char *args)
     }
 
     tick_1 = get_ticks();
-    printf("KPF: Applied patchset in %" PRIu64 " ms\n", (tick_1 - tick_0) / TICKS_IN_1MS);
+    printf("KPF: Applied patchset in %llu ms\n", (tick_1 - tick_0) / TICKS_IN_1MS);
 }
 
-static void set_flags(char *args, palerain_option_t *flags, const char *name)
+static void set_flags(char *args, uint64_t *flags, const char *name)
 {
     if(args[0] != '\0')
     {
-        palerain_option_t val = strtoul(args, NULL, 16);
-        printf("Setting %s to 0x%016" PRIx64 "\n", name, val);
+        uint64_t val = strtoull(args, NULL, 16);
+        printf("Setting %s to 0x%16llx\n", name, val);
         *flags = val;
     }
     else
     {
-        printf("%s: 0x%016" PRIx64 "\n", name, *flags);
+        printf("%s: 0x%06llx\n", name, *flags);
     }
 }
 
@@ -595,18 +636,9 @@ void module_entry(void)
     puts("# Cellebrite (ih8sn0w, cjori, ronyrus et al.)");
     puts("#==================");
 
-    for(size_t i = 0; i < sizeof(kpf_components)/sizeof(kpf_components[0]); ++i)
-    {
-        kpf_component_t *component = kpf_components[i];
-        if(component->pre_init)
-        {
-            component->pre_init();
-        }
-    }
-
     preboot_hook = kpf_cmd;
-    command_register("palera1n_flags", "set flags for checkra1n userland", palera1n_flags_cmd);
-    command_register("kpf", "running checkra1n-kpf without booting (use bootux afterwards)", kpf_cmd);
+    command_register("palera1n_flags", "set flags for palera1n", palera1n_flags_cmd);
+    command_register("kpf", "running checkra1n-kpf without booting (use bootux afterwards)", (void*)kpf_cmd);
     // command_register("overlay", "loads an overlay disk image", kpf_overlay_cmd);
 
     // command_register("overlay", "alias for loading a trustcache, reusing palera1n", kpf_trustcache_cmd);

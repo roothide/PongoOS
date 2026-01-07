@@ -188,6 +188,7 @@ int KHOOK_NEW(mac_vnode_check_signature)(struct vnode *vp, struct cs_blob *cs_bl
             error = 0;
             *signer_type = 0;
             *cs_flags = CS_SIGNED|CS_PLATFORM_BINARY|CS_KILL|CS_ADHOC|CS_VALID; //0x24000203
+            *cs_flags |= CS_GET_TASK_ALLOW; //TS JIT Required
         }
     }
 
@@ -239,6 +240,8 @@ void generate_random_string(unsigned int seed, char *buffer, size_t length) {
 
 #define VM_FLAGS_ANYWHERE               0x00000001
 
+#define POSIX_SPAWN_SETEXEC             0x0040
+
 struct _posix_spawn_args_desc_required {
 	size_t attr_size;
 	void* attrp;
@@ -260,6 +263,7 @@ struct posix_spawn_args {
 int KHOOK_ORIG(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_t *retval);
 int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_t *retval)
 {
+    bool exec = false;
     size_t pathlen = 0;
     char path[PATH_MAX] = {0};
 
@@ -311,6 +315,10 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
                         short flags = 0; //0x0000460C=POSIX_SPAWN_CLOEXEC_DEFAULT|POSIX_SPAWN_SETSID|_POSIX_SPAWN_NANO_ALLOCATOR|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP
                         copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
                         LOG("posix_spawn: flags=0x%08X\n", flags);
+                        
+                        if((flags & POSIX_SPAWN_SETEXEC) != 0) {
+                            exec = true;
+                        }
 
                         flags = 0x00004000; //POSIX_SPAWN_CLOEXEC_DEFAULT
                         copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
@@ -330,7 +338,7 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
 
                 pid_t pid=0;
                 if(new_user_args.pid) copyin(new_user_args.pid, &pid, sizeof(pid));
-                LOG("sapwn jbinit ret=%d pid=%d\n", error, pid);
+                LOG("spawn jbinit ret=%d pid=%d\n", error, pid);
 
                 mach_vm_deallocate(current_map, useraddr, 0x4000);
 
@@ -343,10 +351,10 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
     int error = KHOOK_ORIG(posix_spawn)(ap, uap, retval);
 
     pid_t pid=0;
-    LOG("posix_spawn %s ret=%d pid=%d\n", path, error, ({
-        if(uap->pid) copyin(uap->pid, &pid, sizeof(pid)); //may fail if POSIX_SPAWN_SETEXEC is set
+    LOG("posix_spawn %s ret=%d pid=%d exec=%d\n", path, error, ({
+        if(uap->pid && !exec) copyin(uap->pid, &pid, sizeof(pid)); //may fail if POSIX_SPAWN_SETEXEC is set
         pid;
-    }));
+    }), exec);
 
     return error;
 }

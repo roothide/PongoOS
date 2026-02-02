@@ -26,9 +26,10 @@ uint32_t __shellcode_payload_size = 0;
 
 const char* allowedApps[] = 
 {
-    "/TrollStore.app/TrollStore",
-    "/Dopamine.app/Dopamine",
     "/FilzaTS.app/FilzaTS",
+    "/Dopamine.app/Dopamine",
+    "/Bootstrap.app/Bootstrap",
+    "/TrollStore.app/TrollStore",
     "/CocoaTopTS.app/CocoaTopTS",
 };
 
@@ -38,9 +39,14 @@ const char* allowedIdentities[] =
     "jbinit",
     "com.icraze.gtatracker", //CTBUG2
     "TrollStorePersistenceHelper",
+    "com.apple.Playgrounds.DocumentCheckerExtension", //Bootstrap 2.0
 };
 
-#define TROLLSTORE_DEFAULT_TEAMID   "T8ALTGMVXN"
+const char* allowedTeamIds[] =
+{
+    "T8ALTGMVXN", //CTBUG2
+    "APPLECOMPUTER", //Bootstrap 2.0
+};
 
 #define CONFIG_REQUIRES_U32_MUNGING 1
 
@@ -200,6 +206,10 @@ void write_out(const char* path, void* data, size_t size)
     struct vnode *vp = NULL;
     struct vfs_context* ctx = vfs_context_kernel();
     int ret = vnode_open(path, (O_CREAT | FWRITE), 0755, 0, &vp, ctx);
+    if(ret == EPERM) {
+        //retry with current vfs context
+        ret = vnode_open(path, (O_CREAT | FWRITE), 0755, 0, &vp, NULL);
+    }
     if(ret != 0 || !vp)
     {
         panic("vnode_open failed: %d %p\n", ret, vp);

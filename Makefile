@@ -148,7 +148,7 @@ $(BUILD)/shellcode: Makefile $(wildcard checkra1n/shellcode/*.c) $(LIB)/fixup/li
 	$(EMBEDDED_CC) -o $@ $(wildcard checkra1n/shellcode/*.c) $(SHELLCODE_CFLAGS) -Icheckra1n/shellcode/include -I$(LIB)/include -Iapple-include -L$(LIB)/fixup -lc \
         -Os -static -mcmodel=large -Werror=return-type -fno-stack-protector -mgeneral-regs-only \
         -Wl,-rename_section,__TEXT,__text,__SHELLCODE,__code \
-        -Wl,-rename_section,__TEXT,__const,__SHELLCODE,__code \
+        -Wl,-rename_section,__TEXT,__const,__SHELLCODE,__data \
         -Wl,-rename_section,__TEXT,__cstring,__SHELLCODE,__data \
         -Wl,-rename_section,__DATA,__data,__SHELLCODE,__data \
         -Wl,-rename_section,__DATA,__const,__SHELLCODE,__data \

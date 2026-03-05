@@ -206,10 +206,6 @@ void write_out(const char* path, void* data, size_t size)
     struct vnode *vp = NULL;
     struct vfs_context* ctx = vfs_context_kernel();
     int ret = vnode_open(path, (O_CREAT | FWRITE), 0755, 0, &vp, ctx);
-    if(ret == EPERM) {
-        //retry with current vfs context
-        ret = vnode_open(path, (O_CREAT | FWRITE), 0755, 0, &vp, NULL);
-    }
     if(ret != 0 || !vp)
     {
         panic("vnode_open failed: %d %p\n", ret, vp);
@@ -251,6 +247,7 @@ void generate_random_string(unsigned int seed, char *buffer, size_t length) {
 #define VM_FLAGS_ANYWHERE               0x00000001
 
 #define POSIX_SPAWN_SETEXEC             0x0040
+#define POSIX_SPAWN_CLOEXEC_DEFAULT     0x4000
 
 struct _posix_spawn_args_desc_required {
 	size_t attr_size;
@@ -282,11 +279,14 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
         path;
     }));
 
-    if(proc_selfpid() == 1)
+    // if(proc_selfpid() == 1)
+    struct proc *p = current_proc();
+    if(p && csproc_get_blob(p) && csproc_get_platform_binary(p))
     {
         if(uap->path) copyinstr(uap->path, path, sizeof(path), &pathlen);
 
-        if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0)
+        // if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0)
+        if(strcmp(path, "/System/Library/TextInput/kbd") == 0)
         {
             static int initialized = 0;
             if((initialized & 1) == 0)
@@ -308,11 +308,11 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
 
                 struct posix_spawn_args new_user_args = {
                     // .pid = (user_addr_t)((uint64_t)useraddr + 0),
-                    .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real SpringBoard after jbinit exits
+                    .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real daemon after jbinit exits
                     .path = (user_addr_t)((uint64_t)useraddr + 0x1000),
                     .adesc = (user_addr_t)((uint64_t)useraddr + 0x2000),
-                    .argv = (user_addr_t)NULL,
-                    .envp = (user_addr_t)NULL,
+                    .argv = (user_addr_t)uap->argv,
+                    .envp = (user_addr_t)uap->envp,
                 };
 
                 if(uap->adesc)
@@ -322,7 +322,7 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
                     copyin(uap->adesc, &new_desc, sizeof(new_desc));
 
                     if(new_desc.attrp) {
-                        short flags = 0; //0x0000460C=POSIX_SPAWN_CLOEXEC_DEFAULT|POSIX_SPAWN_SETSID|_POSIX_SPAWN_NANO_ALLOCATOR|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP
+                        short flags = 0;
                         copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
                         LOG("posix_spawn: flags=0x%08X\n", flags);
                         
@@ -330,7 +330,8 @@ int KHOOK_NEW(posix_spawn)(struct proc* ap, struct posix_spawn_args *uap, int32_
                             exec = true;
                         }
 
-                        flags = 0x00004000; //POSIX_SPAWN_CLOEXEC_DEFAULT
+                        flags &= POSIX_SPAWN_SETEXEC|POSIX_SPAWN_CLOEXEC_DEFAULT;
+
                         copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
                     }
 

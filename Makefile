@@ -145,8 +145,11 @@ ifdef DEV_BUILD
     SHELLCODE_CFLAGS += -DDEV_BUILD
 endif
 $(BUILD)/shellcode: Makefile $(wildcard checkra1n/shellcode/*.c) $(LIB)/fixup/libc.a | $(BUILD)
+	touch $(RA1N)/shellcode.c # force rebuild kpf when shellcode changes
 	$(EMBEDDED_CC) -o $@ $(wildcard checkra1n/shellcode/*.c) $(SHELLCODE_CFLAGS) -Icheckra1n/shellcode/include -I$(LIB)/include -Iapple-include -L$(LIB)/fixup -lc \
-        -Os -static -mcmodel=large -Werror=return-type -fno-stack-protector -mgeneral-regs-only \
+        -Oz -static -mcmodel=large -Werror=return-type -fno-stack-protector -mgeneral-regs-only \
+        -Wl,-exported_symbols_list,checkra1n/shellcode/exports.txt \
+        -Werror=frame-larger-than -Wframe-larger-than=2048 \
         -Wl,-rename_section,__TEXT,__text,__SHELLCODE,__code \
         -Wl,-rename_section,__TEXT,__const,__SHELLCODE,__data \
         -Wl,-rename_section,__TEXT,__cstring,__SHELLCODE,__data \

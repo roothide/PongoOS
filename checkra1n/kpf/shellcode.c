@@ -601,10 +601,10 @@ void build_kernelsymbols()
     for(int i=0; i<symtab->nsyms; i++) {
         char* symstr = (char*)(strptr + symbols64[i].n_un.n_strx);
         //LOG("sym[%d] type:%02x sect:%02x desc:%04x value:%llx \tstr:%x\t%s\n", i, symbols64[i].n_type, symbols64[i].n_sect, symbols64[i].n_desc, symbols64[i].n_value, symbols64[i].n_un.n_strx, symstr);
-        if(strncmp(symstr, "ksymbol_", sizeof("ksymbol_")-1) == 0)
+        if(strncmp(symstr, "_ksymbol_", sizeof("_ksymbol_")-1) == 0)
         {
             LOG("found ksymbol %s at %llx\n", symstr, symbols64[i].n_value);
-            *(uint64_t*)shellcode_symbol_ptr(symstr) = ksymbol_required(&symstr[sizeof("ksymbol")-1]);
+            *(uint64_t*)shellcode_symbol_ptr(symstr) = ksymbol_required(&symstr[sizeof("_ksymbol")-1]);
         }
     }
 }

@@ -606,6 +606,20 @@ void build_kernelsymbols()
             LOG("found ksymbol %s at %llx\n", symstr, symbols64[i].n_value);
             *(uint64_t*)shellcode_symbol_ptr(symstr) = ksymbol_required(&symstr[sizeof("_ksymbol")-1]);
         }
+        else if(strncmp(symstr, "_kaddr_", sizeof("_kaddr_")-1) == 0)
+        {
+            LOG("found kaddr %s at %llx\n", symstr, symbols64[i].n_value);
+            
+            const char* addr_str = &symstr[sizeof("_kaddr_")-1];
+
+            char *endptr=NULL;
+            uint64_t addr = strtoull(addr_str, &endptr, 16);
+            if(endptr && *endptr) {
+                panic("Invalid kaddr value: %s", addr_str);
+            }
+
+            *(uint64_t*)shellcode_symbol_ptr(symstr) = addr + xnu_slide_value(xnu_header());
+        }
     }
 }
 
@@ -827,7 +841,7 @@ static void kpf_shellcode_patches__TEXT_EXEC__text(xnu_pf_patchset_t *text_patch
     xnu_pf_maskmatch(text_patchset, "mac_vnode_check_signature", matches, masks, sizeof(matches)/sizeof(uint64_t), true, (void*)kpf_mac_vnode_check_signature_callback);
 }
 
-#define	SYS_posix_spawn    244
+#include "syscall.h"
 #define CONFIG_REQUIRES_U32_MUNGING 1
 struct sysent {         /* system call table */
     void*       sy_call;       /* implementing function */
@@ -891,6 +905,12 @@ static void sysent_gen_patchfinder(uint64_t sysent_va, int nsysent)
     }
 }
 
+#define SET_SYSCALL_HOOK(x) do { \
+    uint64_t x##_va = (uint64_t)sysent[SYS_##x].sy_call; \
+    LOG("sysent[%d].sy_call = %p\n", #x, x##_va); \
+    khook_set_addr(#x, xnu_va_to_ptr(x##_va | 0xFFFF000000000000)); \
+} while(0)
+
 static bool kpf_sysent_callback(struct xnu_pf_patch *patch, struct sysent* sysent)
 {
     static bool found = false;
@@ -900,10 +920,7 @@ static bool kpf_sysent_callback(struct xnu_pf_patch *patch, struct sysent* sysen
         panic("sysent: Found twice");
     }
 
-    uint64_t __posix_spawn = (uint64_t)sysent[SYS_posix_spawn].sy_call;
-    LOG("__posix_spawn = %p\n", __posix_spawn);
-
-    khook_set_addr("posix_spawn", xnu_va_to_ptr(__posix_spawn | 0xFFFF000000000000));
+    SET_SYSCALL_HOOK(posix_spawn);
 
     printf("KPF: Found sysent: %p, %p\n", sysent, xnu_ptr_to_va(sysent));
     found = true;

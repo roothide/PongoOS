@@ -1,3 +1,4 @@
 ___shellcode_*
 _ksymbol_*
 _khook_*
+_kaddr_*

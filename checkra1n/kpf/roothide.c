@@ -262,12 +262,12 @@ bool mach_traps_common(uint64_t tfp)
 }
 bool mach_traps_callback(struct xnu_pf_patch *patch, uint64_t *mach_traps)
 {
-    printf("mach_traps=%p\n", mach_traps);
+    printf("mach_traps=%p : %p\n", mach_traps, xnu_ptr_to_va(mach_traps));
     return mach_traps_common(xnu_rebase_va(mach_traps[45 * 4 + 1]));
 }
 bool mach_traps_alt_callback(struct xnu_pf_patch *patch, uint64_t *mach_traps)
 {
-    printf("mach_traps=%p\n", mach_traps);
+    printf("mach_traps_alt=%p : %p\n", mach_traps, xnu_ptr_to_va(mach_traps));
     return mach_traps_common(xnu_rebase_va(mach_traps[45 * 3 + 1]));
 }
 

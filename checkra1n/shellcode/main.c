@@ -14,8 +14,9 @@
 #define KHOOK_NEW(name)   khook_new_##name
 #define KHOOK_ORIG(name)  (*khook_orig_##name)
 #define KSYMBOL(name)   __asm__("_ksymbol_" #name)
+#define KADDR(addr)   __asm__("_kaddr_" #addr)
 
-#if defined(DEV_BUILD)
+#if defined(DEV_BUILD) && !defined(DEV_TEST)
 #define LOG(...) printf(__VA_ARGS__)
 #else
 #define LOG(...)
@@ -65,6 +66,7 @@ static const char* allowedTeamIds[] =
 #define	PADR_(t)	PAD_(t)
 
 typedef u_int64_t               user_addr_t;
+typedef u_int64_t               user_size_t;
 
 enum uio_rw { UIO_READ, UIO_WRITE };
 enum uio_seg {
@@ -83,6 +85,7 @@ struct vfs_context {
 #define IO_SYNC         0x0004          /* do I/O synchronously */
 #define IO_NODELOCKED   0x0008          /* underlying node already locked */
 
+uint64_t kslide KADDR(0);
 
 void (*panic)(const char *s, ...) KSYMBOL(panic);
 void (*printf)(const char* format, ...) KSYMBOL(printf);
@@ -94,13 +97,16 @@ int (*copyinstr)(const user_addr_t user_addr, char *kernel_addr, size_t nbytes, 
 int (*vn_getpath)(struct vnode *vp, char *pathbuf, int *len) KSYMBOL(vn_getpath);
 
 pid_t (*proc_selfpid)(void) KSYMBOL(proc_selfpid);
-void (*proc_selfname)(char * buf, int size) KSYMBOL(proc_selfname);
+pid_t (*proc_pid)(struct proc* p) KSYMBOL(proc_pid);
+char* (*proc_best_name)(struct proc* p) KSYMBOL(proc_best_name);
 int (*proc_csflags)(struct proc* p, uint64_t *flags) KSYMBOL(proc_csflags);
 
-struct task* (*current_task)(void) KSYMBOL(current_task);
 struct proc* (*current_proc)(void) KSYMBOL(current_proc);
+struct task* (*current_task)(void) KSYMBOL(current_task);
 struct thread* (*current_thread)(void) KSYMBOL(current_thread);
 struct task* (*proc_task)(struct proc* p) KSYMBOL(proc_task);
+struct proc* (*get_bsdtask_info)(struct task* t) KSYMBOL(get_bsdtask_info);
+uint64_t (*thread_tid)(struct thread* thread) KSYMBOL(thread_tid);
 
 struct cs_blob* (*csproc_get_blob)(struct proc *p) KSYMBOL(csproc_get_blob);
 int (*csproc_get_platform_binary)(struct proc *p) KSYMBOL(csproc_get_platform_binary);
@@ -122,6 +128,15 @@ struct vm_map* (*get_task_map)(struct task* t) KSYMBOL(get_task_map);
 kern_return_t (*mach_vm_allocate_external)(struct vm_map* map, void** addr, size_t size, int flags) KSYMBOL(mach_vm_allocate_external);
 kern_return_t (*mach_vm_deallocate)(struct vm_map* map, void* addr, size_t size) KSYMBOL(mach_vm_deallocate);
 
+static char* proc_selfname()
+{
+    return proc_best_name(current_proc());
+}
+
+static uint64_t thread_selftid()
+{
+    return thread_tid(current_thread());
+}
 
 struct __SC_GenericBlob {
 	uint32_t magic;                                 /* magic number */
@@ -282,11 +297,9 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
     size_t vn_pathlen = sizeof(vn_path);
     vn_getpath(vp, vn_path, &vn_pathlen);
 
-    char procname[64] = {0};
-    struct proc *p = current_proc();
-
     LOG("\nmac_vnode_check_signature(%p,%p,%p,%x,%d) error=%d path=%s\n", vp,cs_blob,imgp,flags,platform, error, vn_path);
 
+    struct proc *p = current_proc();
     pid_t current_pid = proc_selfpid();
     if(current_pid == 1)
     {
@@ -319,7 +332,7 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
             {
                 if(strcmp(identity, allowedIdentities[i]) == 0)
                 {
-                    LOG("mac_vnode_check_signature: [%s] Allowing identity: %s : %s\n", ({(void)proc_selfname(procname, sizeof(procname)); procname;}), identity, vn_path);
+                    LOG("mac_vnode_check_signature: [%s] Allowing identity: %s : %s\n", proc_selfname(), identity, vn_path);
                     allow = true;
                     break;
                 }
@@ -333,12 +346,12 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
         const char* alternate_identity = csblob_get_alternate_identity(cs_blob);
         if(alternate_identity && strncmp(alternate_identity, "com.apple.", sizeof("com.apple.")-1) == 0)
         {
-            LOG("mac_vnode_check_signature: [%s] Platformizing (%s): %s\n", ({(void)proc_selfname(procname, sizeof(procname)); procname;}), alternate_identity, vn_path);
+            LOG("mac_vnode_check_signature: [%s] Platformizing (%s): %s\n", proc_selfname(), alternate_identity, vn_path);
             platformize = true;
         }
         else if(imgp == NULL) //librariy loading
         {
-            LOG("mac_vnode_check_signature: [%s] Platformizing library: %s\n", ({(void)proc_selfname(procname, sizeof(procname)); procname;}), vn_path);
+            LOG("mac_vnode_check_signature: [%s] Platformizing library: %s\n", proc_selfname(), vn_path);
             platformize = true;
         }
         else // spawn/exec*
@@ -351,7 +364,7 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
                 {
                     if(strcmp(identity, platformIdentities[i]) == 0)
                     {
-                        LOG("mac_vnode_check_signature: [%s] Platformizing executable(%s): %s\n", ({(void)proc_selfname(procname, sizeof(procname)); procname;}), identity, vn_path);
+                        LOG("mac_vnode_check_signature: [%s] Platformizing executable(%s): %s\n", proc_selfname(), identity, vn_path);
                         platformize = true;
                         break;
                     }
@@ -366,7 +379,8 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
             *cs_flags = CS_VALID|CS_SIGNED|CS_HARD|CS_KILL|CS_ENTITLEMENTS_VALIDATED|CS_GET_TASK_ALLOW;
         }
 
-        if(platformize) {
+        if(platformize) 
+        {
             *cs_flags |= CS_PLATFORM_BINARY|CS_ADHOC;
         }
     }

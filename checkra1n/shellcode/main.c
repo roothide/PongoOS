@@ -7,6 +7,8 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/syslimits.h>
+#include <mach/machine.h>
+#include <mach/vm_types.h>
 #include <mach/kern_return.h>
 
 #include "codesign.h"
@@ -349,13 +351,15 @@ static int handle_vnode_check_signature(int error, struct vnode *vp, struct cs_b
             LOG("mac_vnode_check_signature: [%s] Platformizing (%s): %s\n", proc_selfname(), alternate_identity, vn_path);
             platformize = true;
         }
-        else if(imgp == NULL) //librariy loading
+        else
+#endif
+        //also bypass ipadOS17/18 library validation category checks
+        if(imgp == NULL) //librariy loading
         {
             LOG("mac_vnode_check_signature: [%s] Platformizing library: %s\n", proc_selfname(), vn_path);
             platformize = true;
         }
         else // spawn/exec*
-#endif
         {
             const char* identity = csblob_get_identity(cs_blob);
             if(identity)
@@ -394,6 +398,27 @@ int KHOOK_NEW(mac_vnode_check_signature)(struct vnode *vp, struct cs_blob *cs_bl
     int error = KHOOK_ORIG(mac_vnode_check_signature)(vp, cs_blob, imgp, cs_flags, signer_type, flags, platform);
 
     return handle_vnode_check_signature(error, vp, cs_blob, imgp, cs_flags, signer_type, flags, platform);
+}
+
+//bypass ipadOS18 validate_main_binary_check
+typedef enum __attribute__((enum_extensibility(closed), flag_enum)) : uint8_t {
+	CS_BLOB_ADD_ALLOW_MAIN_BINARY = (1 << 0),
+} cs_blob_add_flags_t;
+int KHOOK_ORIG(ubc_cs_blob_add)(struct vnode* vp, uint32_t platform, cpu_type_t cputype, cpu_subtype_t cpusubtype, off_t base_offset, vm_address_t *addr, vm_size_t size, struct image_params *imgp, int flags, struct cs_blob **ret_blob, cs_blob_add_flags_t csblob_add_flags);
+int KHOOK_NEW(ubc_cs_blob_add)(struct vnode* vp, uint32_t platform, cpu_type_t cputype, cpu_subtype_t cpusubtype, off_t base_offset, vm_address_t *addr, vm_size_t size, struct image_params *imgp, int flags, struct cs_blob **ret_blob, cs_blob_add_flags_t csblob_add_flags)
+{
+    struct proc *p = current_proc();
+
+    uint64_t csflags=0;
+    if(proc_csflags(p, &csflags)==0 && (csflags & CS_GET_TASK_ALLOW)!=0)
+    {
+        csblob_add_flags = CS_BLOB_ADD_ALLOW_MAIN_BINARY;
+    }
+    else if(csproc_get_blob(p) && csproc_get_platform_binary(p))
+    {
+        csblob_add_flags = CS_BLOB_ADD_ALLOW_MAIN_BINARY;
+    }
+    return KHOOK_ORIG(ubc_cs_blob_add)(vp, platform, cputype, cpusubtype, base_offset, addr, size, imgp, flags, ret_blob, csblob_add_flags);
 }
 
 static void write_out(const char* path, void* data, size_t size)

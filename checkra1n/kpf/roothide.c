@@ -661,12 +661,14 @@ void module_entry(void)
     if(kernel_printf) {
         uint32_t* _printf_ptr = xnu_va_to_ptr(kernel_printf);
         for(int i=0; i<100; i++) {
-            if(_printf_ptr[i] == 0x52800025) { //mov w5, 1
+            if(_printf_ptr[i] == 0x52800025 //mov w5, 1
+             || _printf_ptr[i] == 0x52800024) //mov w4, 1 (ipados18)
+            {
                 if((_printf_ptr[i+1]&0xFC000000) != 0x94000000) { //BL?
                     continue;
                 }
                 printf("Found doprnt(is_log=TRUE) in printf\n");
-                _printf_ptr[i] = 0x52800005; //mov w5, 0
+                _printf_ptr[i] &= 0x5280000F; //mov wX, 0
                 break;
             }
         }

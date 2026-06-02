@@ -759,6 +759,8 @@ void build_shellcode_payload()
     *(uint32_t*)shellcode_symbol_ptr("___shellcode_payload_size") = shellcode_payload_size;
 }
 
+static const int ubc_cs_blob_add_min_xnu_ver = 11000; //test 8020;
+
 static void kpf_shellcode_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstring)
 {
     did_run = true;
@@ -771,6 +773,9 @@ static void kpf_shellcode_init(struct mach_header_64 *hdr, xnu_pf_range_t *cstri
     //add hooks
     khook_function("posix_spawn", NULL);
     khook_function("mac_vnode_check_signature", NULL);
+    if(gKernelVersion.xnuMajor > ubc_cs_blob_add_min_xnu_ver) {
+        khook_function("ubc_cs_blob_add", NULL);
+    }
 }
 
 static void kpf_shellcode_finish(struct mach_header_64 *hdr)
@@ -826,6 +831,60 @@ static bool kpf_mac_vnode_check_signature_callback(struct xnu_pf_patch *patch, u
     return true;
 }
 
+static bool kpf_ubc_cs_blob_add_callback(struct xnu_pf_patch *patch, uint32_t *opcode_stream)
+{
+    static bool found = false;
+
+    uint32_t adrp = opcode_stream[0], add  = opcode_stream[1];
+    char* str = (char*)(((uint64_t)(opcode_stream) & ~0xfffULL) + adrp_off(adrp) + ((add >> 10) & 0xfff));
+    if(strncmp(str, "validated cs_blob has no code directory @%s:%d", sizeof("validated cs_blob has no code directory @%s:%d")-1) != 0)
+    {
+        return false;
+    }
+
+    if(found)
+    {
+        panic("ubc_cs_blob_add: Found twice");
+    }
+
+    found = true;
+
+    uint32_t *start = find_prev_insn(opcode_stream - 1, 200, 0xd10003ff, 0xffc003ff); // sub sp, sp, ...
+    if(start)
+    {
+        printf("KPF: Found ubc_cs_blob_add internal func: %p, %p\n", start, xnu_ptr_to_va(start));
+        opcode_stream = NULL;
+
+        xnu_pf_range_t* text_range = xnu_pf_section(xnu_header(), "__TEXT_EXEC", "__text");
+        if (text_range) {
+            uint32_t *stream = (uint32_t *)text_range->cacheable_base;
+            uint32_t count = text_range->size >> 2;
+            for (uint32_t i = 0; i < count; i++) {
+                if ((stream[i] & 0xFC000000) == 0x94000000) { // BL ...
+                    if ((&stream[i] + sxt32(stream[i], 26)) == start) {
+                        printf("KPF: Found ubc_cs_blob_add internal call: %p, %p\n", &stream[i], xnu_ptr_to_va(&stream[i]));
+                        opcode_stream = &stream[i];
+                        break;
+                    }
+                }
+            }
+        }
+
+        if(!opcode_stream) return false;
+    }
+
+    start = find_prev_insn(opcode_stream - 1, 1000, 0xa9a003e0, 0xffe003e0); // stp xN, xM, [sp, #-0x...]!
+    if(!start)
+    {
+        panic("ubc_cs_blob_add: Failed to find start of function");
+    }
+
+    khook_set_addr("ubc_cs_blob_add", start);
+
+    printf("KPF: Found ubc_cs_blob_add: %p, %p\n", start, xnu_ptr_to_va(start));
+    return true;
+}
+
 static void kpf_shellcode_patches__TEXT_EXEC__text(xnu_pf_patchset_t *text_patchset)
 {
     uint64_t matches[] =
@@ -839,6 +898,11 @@ static void kpf_shellcode_patches__TEXT_EXEC__text(xnu_pf_patchset_t *text_patch
         0xffc003ff,
     };
     xnu_pf_maskmatch(text_patchset, "mac_vnode_check_signature", matches, masks, sizeof(matches)/sizeof(uint64_t), true, (void*)kpf_mac_vnode_check_signature_callback);
+
+    if(gKernelVersion.xnuMajor > ubc_cs_blob_add_min_xnu_ver)
+    {
+        xnu_pf_maskmatch(text_patchset, "ubc_cs_blob_add", matches, masks, sizeof(matches)/sizeof(uint64_t), true, (void*)kpf_ubc_cs_blob_add_callback);
+    }
 }
 
 #include "syscall.h"
@@ -907,7 +971,7 @@ static void sysent_gen_patchfinder(uint64_t sysent_va, int nsysent)
 
 #define SET_SYSCALL_HOOK(x) do { \
     uint64_t x##_va = (uint64_t)sysent[SYS_##x].sy_call; \
-    LOG("sysent[%d].sy_call = %p\n", #x, x##_va); \
+    LOG("sysent[%s].sy_call = %p\n", #x, x##_va); \
     khook_set_addr(#x, xnu_va_to_ptr(x##_va | 0xFFFF000000000000)); \
 } while(0)
 

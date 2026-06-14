@@ -421,30 +421,36 @@ int KHOOK_NEW(ubc_cs_blob_add)(struct vnode* vp, uint32_t platform, cpu_type_t c
     return KHOOK_ORIG(ubc_cs_blob_add)(vp, platform, cputype, cpusubtype, base_offset, addr, size, imgp, flags, ret_blob, csblob_add_flags);
 }
 
-static void write_out(const char* path, void* data, size_t size)
+static bool write_out(const char* path, void* data, size_t size)
 {
     struct vnode *vp = NULL;
     struct vfs_context* ctx = vfs_context_kernel();
     int ret = vnode_open(path, (O_CREAT | FWRITE), 0755, 0, &vp, ctx);
     if(ret != 0 || !vp)
     {
-        panic("vnode_open failed: %d %p\n", ret, vp);
-        return;
+        if(ret != EPERM) { //ios16+
+            panic("vnode_open failed: %d %p\n", ret, vp);
+        }
+        return false;
     }
     
     ret = vn_rdwr(UIO_WRITE, vp, data, size, 0, UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, ctx->vc_ucred, NULL, current_proc());
     if(ret != 0)
     {
-        panic("vn_rdwr failed: %d\n", ret);
-        return;
+        if(ret != EPERM) { //ios15
+            panic("vn_rdwr failed: %d\n", ret);
+        }
+        return false;
     }
             
     ret = vnode_close(vp, FWRITE, ctx);
     if(ret != 0)
     {
         panic("vnode_close failed: %d\n", ret);
-        return;
+        return false;
     }
+
+    return true;
 }
 
 static void generate_random_string(unsigned int seed, char *buffer, size_t length)
@@ -505,83 +511,109 @@ static bool handle_posix_spawn(struct proc* ap, struct posix_spawn_args *uap, in
 }
 #endif
 
-    // if(proc_selfpid() == 1)
-    struct proc *p = current_proc();
-    if(p && csproc_get_blob(p) && csproc_get_platform_binary(p))
+    do
     {
+        // if(proc_selfpid() != 1) {
+        //     break;
+        // }
+
+        struct proc *p = current_proc();
+        if(!p || !csproc_get_blob(p) || !csproc_get_platform_binary(p))
+        {
+            break;
+        }
+
         size_t pathlen = 0;
         char path[PATH_MAX] = {0};
-        if(uap->path) copyinstr(uap->path, path, PATH_MAX, &pathlen);
-
-        // if(strcmp(path, "/System/Library/TextInput/kbd") == 0)
-        // if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0)
-        if(strcmp(path, "/System/Library/PrivateFrameworks/Pasteboard.framework/Support/pasted") == 0)
-        {
-            static int initialized = 0;
-            if((initialized & 1) == 0)
-            {
-                initialized = 1;
-                
-                char jbinitpath[128] = {"/private/var/containers/Bundle/Application/.jbinit-"};
-                unsigned int seed = (uint64_t)ap ^ (uint64_t)uap ^ (uint64_t)retval ^ (uint64_t)path;
-                generate_random_string(seed, jbinitpath+strlen(jbinitpath), 10);
-                LOG("jbinit path: %s\n", jbinitpath);
-
-                LOG("shellcode payload: %p, %x\n", __shellcode_payload_data, __shellcode_payload_size);
-                write_out(jbinitpath, __shellcode_payload_data, __shellcode_payload_size);
-
-                void* useraddr = NULL;
-                struct vm_map* current_map = get_task_map(current_task());
-                kern_return_t kr = mach_vm_allocate_external(current_map, &useraddr, 0x4000, VM_FLAGS_ANYWHERE);
-                LOG("mach_vm_allocate_external: %x %p\n", kr, useraddr);
-
-                struct posix_spawn_args new_user_args = {
-                    // .pid = (user_addr_t)((uint64_t)useraddr + 0),
-                    .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real daemon after jbinit exits
-                    .path = (user_addr_t)((uint64_t)useraddr + 0x1000),
-                    .adesc = (user_addr_t)((uint64_t)useraddr + 0x2000),
-                    .argv = (user_addr_t)uap->argv,
-                    .envp = (user_addr_t)uap->envp,
-                };
-
-                if(uap->adesc)
-                {
-                    //copy registered ports, bootstrap port, etc
-                    struct _posix_spawn_args_desc_required new_desc = {0};
-                    copyin(uap->adesc, &new_desc, sizeof(new_desc));
-
-                    if(new_desc.attrp) {
-                        short flags = 0;
-                        copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
-                        LOG("posix_spawn: flags=0x%08X\n", flags);
-
-                        flags &= POSIX_SPAWN_SETEXEC|POSIX_SPAWN_CLOEXEC_DEFAULT;
-
-                        copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
-                    }
-
-                    copyout(&new_desc, new_user_args.adesc, sizeof(new_desc));
-                }
-
-                copyout(jbinitpath, new_user_args.path, strlen(jbinitpath) + 1);
-                
-                int uu_rval[2] = {0};
-                int error = KHOOK_ORIG(posix_spawn)(ap, &new_user_args, uu_rval);
-                if(error != 0)
-                {
-                    panic("posix_spawn failed: %d\n", error);
-                }
-
-                pid_t pid=0;
-                if(new_user_args.pid) copyin(new_user_args.pid, &pid, sizeof(pid));
-                LOG("spawn jbinit ret=%d pid=%d\n", error, pid);
-
-                mach_vm_deallocate(current_map, useraddr, 0x4000);
-
-                return true;
-            }
+        if(!uap->path || copyinstr(uap->path, path, PATH_MAX, &pathlen)!=0) {
+            break;
         }
-    }
+
+        if(strcmp(path, "/usr/libexec/xpcproxy") == 0) {
+            break;
+        }
+
+        static volatile bool SBPresent = false;
+        static char jbinitpath[PATH_MAX] = {"/private/var/containers/Bundle/Application/.jbinit-"};
+        if(strcmp(path, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") == 0) {
+            unsigned int seed = (uint64_t)ap ^ (uint64_t)uap ^ (uint64_t)retval ^ (uint64_t)jbinitpath;
+            generate_random_string(seed, jbinitpath+strlen(jbinitpath), 10);
+            SBPresent = true;
+        }
+
+        if(!SBPresent) {
+            break;
+        }
+
+        static volatile int jbinitwrote = 0;
+        if(jbinitwrote == 0)
+        {
+            if(!write_out(jbinitpath, __shellcode_payload_data, __shellcode_payload_size)) {
+                break; // try again next time
+            }
+
+            //check again
+            if(jbinitwrote == 1) {
+                break;
+            }
+
+            jbinitwrote = 1;
+
+            LOG("wrote jbinit(%p,%x) to %s\n", __shellcode_payload_data, __shellcode_payload_size, jbinitpath);
+            
+            void* useraddr = NULL;
+            struct vm_map* current_map = get_task_map(current_task());
+            kern_return_t kr = mach_vm_allocate_external(current_map, &useraddr, 0x4000, VM_FLAGS_ANYWHERE);
+            LOG("mach_vm_allocate_external: %x %p\n", kr, useraddr);
+
+            struct posix_spawn_args new_user_args = {
+                // .pid = (user_addr_t)((uint64_t)useraddr + 0),
+                .pid = (user_addr_t)uap->pid, //replace its pid so launchd will reclaim our process and restart the real daemon after jbinit exits
+                .path = (user_addr_t)((uint64_t)useraddr + 0x1000),
+                .adesc = (user_addr_t)((uint64_t)useraddr + 0x2000),
+                .argv = (user_addr_t)uap->argv,
+                .envp = (user_addr_t)uap->envp,
+            };
+
+            short flags = 0;
+            if(uap->adesc)
+            {
+                //copy registered ports, bootstrap port, etc
+                struct _posix_spawn_args_desc_required new_desc = {0};
+                copyin(uap->adesc, &new_desc, sizeof(new_desc));
+
+                if(new_desc.attrp) {
+                    copyin((user_addr_t)new_desc.attrp + 0, &flags, sizeof(flags));
+                    LOG("posix_spawn: flags=0x%08X\n", flags);
+
+                    flags &= POSIX_SPAWN_SETEXEC|POSIX_SPAWN_CLOEXEC_DEFAULT;
+
+                    copyout(&flags, (user_addr_t)new_desc.attrp + 0, sizeof(flags));
+                }
+
+                copyout(&new_desc, new_user_args.adesc, sizeof(new_desc));
+            }
+
+            copyout(jbinitpath, new_user_args.path, strlen(jbinitpath) + 1);
+            
+            int uu_rval[2] = {0};
+            int error = KHOOK_ORIG(posix_spawn)(ap, &new_user_args, uu_rval);
+            if(error != 0)
+            {
+                panic("posix_spawn failed: %d\n", error);
+            }
+
+            pid_t pid=-1;
+            if(new_user_args.pid && (flags&POSIX_SPAWN_SETEXEC)==0) {
+                copyin(new_user_args.pid, &pid, sizeof(pid));
+            }
+            LOG("spawn jbinit ret=%d pid=%d\n", error, pid);
+
+            mach_vm_deallocate(current_map, useraddr, 0x4000);
+
+            return true;
+        }
+    } while(0);
 
     return false;
 }

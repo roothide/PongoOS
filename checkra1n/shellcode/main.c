@@ -100,7 +100,7 @@ int (*vn_getpath)(struct vnode *vp, char *pathbuf, int *len) KSYMBOL(vn_getpath)
 
 pid_t (*proc_selfpid)(void) KSYMBOL(proc_selfpid);
 pid_t (*proc_pid)(struct proc* p) KSYMBOL(proc_pid);
-char* (*proc_best_name)(struct proc* p) KSYMBOL(proc_best_name);
+char* (*proc_best_name)(struct proc* p) KSYMBOL(proc_best_name); //some iOS dev kernels do not have this, but they have proc_name/proc_selfname
 int (*proc_csflags)(struct proc* p, uint64_t *flags) KSYMBOL(proc_csflags);
 
 struct proc* (*current_proc)(void) KSYMBOL(current_proc);

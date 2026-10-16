@@ -286,19 +286,19 @@ void build_shellcode()
                     if(vaddr>=shellcode_code_section->addr && vaddr<(shellcode_code_section->addr+shellcode_code_section->size))
                     {
                         uint64_t off = vaddr - shellcode_code_section->addr;
-                        new_vaddr = xnu_ptr_to_va((uint64_t)shellcode_code_area + off);
+                        new_vaddr = xnu_ptr_to_va((void*)((uint64_t)shellcode_code_area + off));
                     }
                     else if(vaddr>=shellcode_data_section->addr && vaddr<(shellcode_data_section->addr+shellcode_data_section->size))
                     {
                         uint64_t off = vaddr - shellcode_data_section->addr;
-                        new_vaddr = xnu_ptr_to_va((uint64_t)shellcode_data_area + off);
+                        new_vaddr = xnu_ptr_to_va((void*)((uint64_t)shellcode_data_area + off));
 
                     }
                     else {
                         panic("unexpected ADRL: %llx @ %llx", vaddr, module_offset);
                     }
 
-                    uint64_t from_PAGE = ALIGN(xnu_ptr_to_va((uint64_t)real_shellcode_p), 0x1000);
+                    uint64_t from_PAGE = ALIGN(xnu_ptr_to_va((void*)real_shellcode_p), 0x1000);
                     uint64_t to_PAGE = ALIGN(new_vaddr, 0x1000);
                     uint64_t PAGEOFF = new_vaddr % 0x1000;
                 
@@ -365,7 +365,7 @@ void build_shellcode()
 
         uint64_t newvalue = *reloc + slide;
         LOG("reloc 0x%x->%p: %p->%p\n", reloc_ptr[i].r_address, reloc, *reloc, newvalue);
-        *reloc = xnu_ptr_to_va(newvalue);
+        *reloc = xnu_ptr_to_va((void*)newvalue);
     }
 }
 
@@ -908,9 +908,9 @@ static void kpf_shellcode_patches__TEXT_EXEC__text(xnu_pf_patchset_t *text_patch
 #include "syscall.h"
 #define CONFIG_REQUIRES_U32_MUNGING 1
 struct sysent {         /* system call table */
-    void*       sy_call;       /* implementing function */
+    uint64_t       sy_call;       /* implementing function */
 #if CONFIG_REQUIRES_U32_MUNGING
-    void*       sy_arg_munge32; /* system call arguments munger for 32-bit process */
+    uint64_t       sy_arg_munge32; /* system call arguments munger for 32-bit process */
 #endif
     int32_t     sy_return_type; /* system call return types */
     int16_t     sy_narg;        /* number of args */
